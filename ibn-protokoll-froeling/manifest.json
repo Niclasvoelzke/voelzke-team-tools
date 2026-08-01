@@ -1,0 +1,9 @@
+{
+  "name": "IBN-Protokoll Fröling – Völzke",
+  "short_name": "IBN Fröling",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#eef2f6",
+  "theme_color": "#0d2f52",
+  "icons": []
+}
