@@ -1,0 +1,9 @@
+{
+  "name": "Checklisten – Völzke",
+  "short_name": "Checklisten",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#eef2f6",
+  "theme_color": "#0d2f52",
+  "icons": []
+}
