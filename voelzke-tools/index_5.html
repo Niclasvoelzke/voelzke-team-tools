@@ -4232,6 +4232,166 @@ function openLog(key){
   renderLogOnly(key);
 }
 
+/* ============================================================
+   LAGERBESTELLUNGEN — Freitext-Bedarf mit "bestellt"-Haken
+   ============================================================ */
+const BESTELLUNGEN_ARCHIV_MONATE = 3;
+let bestellungenZeigeAlte = false;
+
+function bestellungUuid(){
+  if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'id-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+}
+
+function bestellungIstAlt(datumStr){
+  const d = datumStr ? new Date(datumStr) : null;
+  if(!d || isNaN(d.getTime())) return false;
+  const grenze = new Date();
+  grenze.setMonth(grenze.getMonth() - BESTELLUNGEN_ARCHIV_MONATE);
+  return d < grenze;
+}
+
+function renderBestellungenScreen(){
+  document.getElementById('backBtn').style.display = 'inline-block';
+  document.getElementById('bottomBar').style.display = 'none';
+  document.getElementById('headerTitle').innerHTML = 'Lagerbestellungen<span>Völzke Heizung · Lüftung · Sanitär</span>';
+
+  document.getElementById('mainContent').innerHTML = `
+    <div class="section">
+      <div class="section-header"><h3>Neuer Bedarf</h3></div>
+      <div class="section-body">
+        <div class="field">
+          <label>Was wird benötigt? <span class="hint">— Diktierfunktion der Tastatur nutzen</span></label>
+          <textarea id="bestellungInput" placeholder="z.B. 10x Kupferrohr 22mm, 2x Presszange..."></textarea>
+        </div>
+        <button type="button" class="btn-sm pick" onclick="submitBestellung()">Eintragen</button>
+      </div>
+    </div>
+    <div class="section" id="bestellungListPanel">
+      <div class="section-header" style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>Bisherige Einträge</h3>
+        <button type="button" class="btn-sm pick" onclick="loadBestellungen()">Aktualisieren</button>
+      </div>
+      <div class="section-body">
+        <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#33475a;font-weight:600;margin-bottom:12px;">
+          <input type="checkbox" id="bestellungZeigeAlteBox" onchange="toggleBestellungenAlte(this.checked)">
+          Einträge älter als 3 Monate anzeigen
+        </label>
+        <div id="bestellungListe"><p class="hint">Lade Einträge…</p></div>
+      </div>
+    </div>
+  `;
+  window.scrollTo(0,0);
+  loadBestellungen();
+}
+
+async function submitBestellung(){
+  const feld = document.getElementById('bestellungInput');
+  const text = (feld.value || '').trim();
+  if(!text){ showToast('Bitte zuerst Text eingeben'); return; }
+  if(!GOOGLE_SHEET_WEBHOOK_URL || GOOGLE_SHEET_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0){
+    showToast('Google-Sheet-Adresse noch nicht eingetragen');
+    return;
+  }
+  const eintrag = {
+    checklist: 'bestellung',
+    action: 'create',
+    id: bestellungUuid(),
+    text,
+    erstellt: new Date().toISOString(),
+  };
+  showToast('Speichere Eintrag…');
+  try{
+    await fetch(GOOGLE_SHEET_WEBHOOK_URL, {
+      method:'POST',
+      mode:'no-cors',
+      headers:{ 'Content-Type':'text/plain' },
+      body: JSON.stringify(eintrag),
+    });
+    feld.value = '';
+    showToast('Eintrag gespeichert ✓');
+    setTimeout(loadBestellungen, 900); // kurze Pause, damit die Sheet-Zeile sicher geschrieben ist
+  } catch(err){
+    showToast('Fehler beim Speichern — kein Internet?');
+  }
+}
+
+async function toggleBestellung(id, checked){
+  // Optimistisch: UI-Status wurde durch die Checkbox bereits geändert.
+  if(!GOOGLE_SHEET_WEBHOOK_URL || GOOGLE_SHEET_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0) return;
+  try{
+    await fetch(GOOGLE_SHEET_WEBHOOK_URL, {
+      method:'POST',
+      mode:'no-cors',
+      headers:{ 'Content-Type':'text/plain' },
+      body: JSON.stringify({ checklist:'bestellung', action:'toggle', id, bestellt: checked ? 'Ja' : 'Nein' }),
+    });
+    showToast(checked ? 'Als bestellt markiert ✓' : 'Markierung entfernt');
+  } catch(err){
+    showToast('Fehler beim Speichern — kein Internet?');
+  }
+}
+
+function toggleBestellungenAlte(checked){
+  bestellungenZeigeAlte = checked;
+  loadBestellungen();
+}
+
+async function loadBestellungen(){
+  const container = document.getElementById('bestellungListe');
+  if(!container) return;
+  if(!GOOGLE_SHEET_WEBHOOK_URL || GOOGLE_SHEET_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0){
+    container.innerHTML = '<p class="hint">Google-Sheet-Adresse noch nicht eingetragen.</p>';
+    return;
+  }
+  container.innerHTML = '<p class="hint">Lade Einträge…</p>';
+  try{
+    const res = await fetch(GOOGLE_SHEET_WEBHOOK_URL + '?checklist=bestellung');
+    const rows = await res.json();
+    if(!Array.isArray(rows) || rows.length === 0){
+      container.innerHTML = '<p class="hint">Noch keine Einträge vorhanden.</p>';
+      return;
+    }
+    const sortiert = rows.slice().reverse(); // neueste zuerst
+    const aktuelle = sortiert.filter(r => bestellungenZeigeAlte || !bestellungIstAlt(r.erstellt));
+    const archivAnzahl = sortiert.length - sortiert.filter(r => !bestellungIstAlt(r.erstellt)).length;
+
+    if(aktuelle.length === 0){
+      container.innerHTML = `<p class="hint">Keine aktuellen Einträge.${archivAnzahl>0 ? ' ('+archivAnzahl+' archiviert — Haken oben setzen zum Anzeigen)' : ''}</p>`;
+      return;
+    }
+
+    container.innerHTML = aktuelle.map(r=>{
+      const datum = r.erstellt ? new Date(r.erstellt) : null;
+      const datumStr = (datum && !isNaN(datum.getTime()))
+        ? datum.toLocaleDateString('de-DE') + ' · ' + datum.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) + ' Uhr'
+        : '';
+      const bestellt = r.bestellt === 'Ja';
+      const alt = bestellungIstAlt(r.erstellt);
+      return `<div class="gallery-item" style="align-items:flex-start;">
+        <div style="flex:1;">
+          <div style="font-weight:700;color:var(--blue-dark);${bestellt?'text-decoration:line-through;opacity:.6;':''}">${escapeHtml(r.text||'')}</div>
+          <div class="hint">${escapeHtml(datumStr)}${alt?' · archiviert':''}</div>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#33475a;flex:none;">
+          <input type="checkbox" ${bestellt?'checked':''} onchange="toggleBestellung('${r.id}', this.checked); this.closest('.gallery-item').style.opacity='.6';">
+          bestellt
+        </label>
+      </div>`;
+    }).join('');
+  } catch(err){
+    container.innerHTML = '<p class="hint">Einträge konnten nicht geladen werden — kein Internet?</p>';
+  }
+}
+
+function openBestellungen(){
+  window.submitBestellung = submitBestellung;
+  window.toggleBestellung = toggleBestellung;
+  window.toggleBestellungenAlte = toggleBestellungenAlte;
+  window.loadBestellungen = loadBestellungen;
+  renderBestellungenScreen();
+}
+
 async function loadLog(key){
   const container = document.getElementById('historyList');
   if(!container) return;
@@ -4621,7 +4781,7 @@ async function exportPdf(){
 
 }
 
-return { openChecklist, openLog, CHECKLISTS, HOME_ORDER };
+return { openChecklist, openLog, openBestellungen, CHECKLISTS, HOME_ORDER };
 }
 
 </script>
@@ -4679,6 +4839,14 @@ function initApps(){
     title: 'Protokoll Lagerkontrolle',
     desc: 'Bisherige Einträge der Lagerkontrolle einsehen'
   });
+
+  // Extra-Kachel: Lagerbestellungen (Freitext-Bedarf mit "bestellt"-Haken)
+  TOOL_CATALOG.checklisten.items.push({
+    key: 'bestellungen',
+    icon: '📝',
+    title: 'Lagerbestellungen',
+    desc: 'Benötigtes Material erfassen & Bestellstatus abhaken'
+  });
 }
 
 function showHome(){
@@ -4732,6 +4900,7 @@ function showCategoryList(catKey){
     btn.addEventListener('click', ()=>{
       if(catKey === 'ibn') openIbnTool(btn.dataset.key);
       else if(btn.dataset.key === 'lager_log') openLagerLog();
+      else if(btn.dataset.key === 'bestellungen') openBestellungen();
       else openChecklistTool(btn.dataset.key);
     });
   });
@@ -4742,6 +4911,13 @@ function openLagerLog(){
   activeCategory = 'checklisten';
   setChrome({ tabNav:false, bottomBar:false, prevNext:false, statusPill:false, back:true });
   shellChecklistenApp.openLog('lager');
+}
+
+function openBestellungen(){
+  screen = 'checkForm';
+  activeCategory = 'checklisten';
+  setChrome({ tabNav:false, bottomBar:false, prevNext:false, statusPill:false, back:true });
+  shellChecklistenApp.openBestellungen();
 }
 
 function openIbnTool(key){
