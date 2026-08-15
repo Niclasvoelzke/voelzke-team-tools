@@ -4235,20 +4235,11 @@ function openLog(key){
 /* ============================================================
    LAGERBESTELLUNGEN — Freitext-Bedarf mit "bestellt"-Haken
    ============================================================ */
-const BESTELLUNGEN_ARCHIV_MONATE = 3;
-let bestellungenZeigeAlte = false;
+let bestellungenZeigeBestellte = false;
 
 function bestellungUuid(){
   if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
   return 'id-' + Date.now() + '-' + Math.random().toString(16).slice(2);
-}
-
-function bestellungIstAlt(datumStr){
-  const d = datumStr ? new Date(datumStr) : null;
-  if(!d || isNaN(d.getTime())) return false;
-  const grenze = new Date();
-  grenze.setMonth(grenze.getMonth() - BESTELLUNGEN_ARCHIV_MONATE);
-  return d < grenze;
 }
 
 function renderBestellungenScreen(){
@@ -4274,8 +4265,8 @@ function renderBestellungenScreen(){
       </div>
       <div class="section-body">
         <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#33475a;font-weight:600;margin-bottom:12px;">
-          <input type="checkbox" id="bestellungZeigeAlteBox" onchange="toggleBestellungenAlte(this.checked)">
-          Einträge älter als 3 Monate anzeigen
+          <input type="checkbox" id="bestellungZeigeBestellteBox" onchange="toggleBestellungenBestellte(this.checked)">
+          Bereits bestellte Einträge anzeigen
         </label>
         <div id="bestellungListe"><p class="hint">Lade Einträge…</p></div>
       </div>
@@ -4332,8 +4323,8 @@ async function toggleBestellung(id, checked){
   }
 }
 
-function toggleBestellungenAlte(checked){
-  bestellungenZeigeAlte = checked;
+function toggleBestellungenBestellte(checked){
+  bestellungenZeigeBestellte = checked;
   loadBestellungen();
 }
 
@@ -4353,25 +4344,29 @@ async function loadBestellungen(){
       return;
     }
     const sortiert = rows.slice().reverse(); // neueste zuerst
-    const aktuelle = sortiert.filter(r => bestellungenZeigeAlte || !bestellungIstAlt(r.erstellt));
-    const archivAnzahl = sortiert.length - sortiert.filter(r => !bestellungIstAlt(r.erstellt)).length;
+    if(sortiert.length){
+      console.log('[Lagerbestellungen] Beispiel-Zeile vom Sheet:', sortiert[0]); // Hilfe zur Fehlersuche, F12 -> Konsole
+    }
+    const aktuelle = sortiert.filter(r => bestellungenZeigeBestellte || bestellungWert(r,'bestellt') !== 'Ja');
+    const bestelltAnzahl = sortiert.length - aktuelle.length;
 
     if(aktuelle.length === 0){
-      container.innerHTML = `<p class="hint">Keine aktuellen Einträge.${archivAnzahl>0 ? ' ('+archivAnzahl+' archiviert — Haken oben setzen zum Anzeigen)' : ''}</p>`;
+      container.innerHTML = `<p class="hint">Keine offenen Einträge.${bestelltAnzahl>0 ? ' ('+bestelltAnzahl+' bereits bestellt — Haken oben setzen zum Anzeigen)' : ''}</p>`;
       return;
     }
 
     container.innerHTML = aktuelle.map(r=>{
-      const datum = r.erstellt ? new Date(r.erstellt) : null;
+      const erstelltRoh = bestellungWert(r,'erstellt');
+      const datum = erstelltRoh ? new Date(erstelltRoh) : null;
       const datumStr = (datum && !isNaN(datum.getTime()))
         ? datum.toLocaleDateString('de-DE') + ' · ' + datum.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) + ' Uhr'
-        : '';
-      const bestellt = r.bestellt === 'Ja';
-      const alt = bestellungIstAlt(r.erstellt);
+        : (erstelltRoh || '');
+      const bestellt = bestellungWert(r,'bestellt') === 'Ja';
+      const text = bestellungWert(r,'text');
       return `<div class="gallery-item" style="align-items:flex-start;">
         <div style="flex:1;">
-          <div style="font-weight:700;color:var(--blue-dark);${bestellt?'text-decoration:line-through;opacity:.6;':''}">${escapeHtml(r.text||'')}</div>
-          <div class="hint">${escapeHtml(datumStr)}${alt?' · archiviert':''}</div>
+          <div style="font-weight:700;color:var(--blue-dark);${bestellt?'text-decoration:line-through;opacity:.6;':''}">${escapeHtml(text || '(kein Text übermittelt)')}</div>
+          <div class="hint">${escapeHtml(datumStr || 'kein Zeitstempel übermittelt')}</div>
         </div>
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#33475a;flex:none;">
           <input type="checkbox" ${bestellt?'checked':''} onchange="toggleBestellung('${r.id}', this.checked); this.closest('.gallery-item').style.opacity='.6';">
@@ -4384,10 +4379,24 @@ async function loadBestellungen(){
   }
 }
 
+// Liest ein Feld robust aus einer Sheet-Zeile aus, unabhängig von Groß-/Kleinschreibung
+// oder eventuellen Präfixen/Suffixen in der Spaltenüberschrift (Hilfe zur Fehlersuche).
+function bestellungWert(row, feld){
+  if(row[feld] !== undefined && row[feld] !== '') return row[feld];
+  const gesucht = feld.toLowerCase();
+  for(const key in row){
+    if(key.toLowerCase() === gesucht && row[key] !== '') return row[key];
+  }
+  for(const key in row){
+    if(key.toLowerCase().includes(gesucht) && row[key] !== '') return row[key];
+  }
+  return '';
+}
+
 function openBestellungen(){
   window.submitBestellung = submitBestellung;
   window.toggleBestellung = toggleBestellung;
-  window.toggleBestellungenAlte = toggleBestellungenAlte;
+  window.toggleBestellungenBestellte = toggleBestellungenBestellte;
   window.loadBestellungen = loadBestellungen;
   renderBestellungenScreen();
 }
