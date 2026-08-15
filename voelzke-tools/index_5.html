@@ -3826,7 +3826,7 @@ function dat(id,label){ return {type:'date', id, label}; }
    ============================================================ */
 // Nach dem Einrichten des Google Apps Script Web Apps hier die eigene
 // Deployment-URL eintragen (siehe Anleitung von Claude).
-const GOOGLE_SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbz2aGeHpPCiBRTGPnTyvyKZktvbto40O0aUEiYN8yU-oJNmR7DO8pU5slGwpGDKRsuohg/exec';
+const GOOGLE_SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzAOfBdS3CChXh0_sAMbyzt5SFDVneykBjJ3HTeSzfyz1y1jRjWhPThTRkrUIcmaBHkbw/exec';
 
 const SHEET_LOG_CHECKLISTS = {
   lager: {
@@ -4105,8 +4105,8 @@ const CHECKLISTS = {
         chip('lg_schellenregal','Augenscheinlich Fehleinsortierung?'),
         area('lg_schellenregal_notiz','Was war falsch einsortiert und wo?'),
       ]},
-      { id:'zuordnung', title:'Zuordnung', fields:[
-        text('lg_verantwortlich','Wer hat zuletzt zurückgeräumt?','Vermutung anhand Plantafel'),
+      { id:'zuordnung', title:'Zuordnung (optional)', fields:[
+        text('lg_verantwortlich','Wer hat zuletzt zurückgeräumt?','Nur ausfüllen, wenn tatsächlich falsches Material gefunden wurde — Vermutung anhand Plantafel'),
       ]},
     ],
     signature: { id:'lg_unterschrift', label:'Unterschrift Kontrolleur' },
@@ -4188,7 +4188,18 @@ function renderChecklist(key){
   document.getElementById('bottomBar').style.display = 'flex';
   document.getElementById('headerTitle').innerHTML = `${cl.title}<span>Völzke Heizung · Lüftung · Sanitär</span>`;
 
-  let html = cl.sections.map(renderSection).join('');
+  let html = '';
+  if(SHEET_LOG_CHECKLISTS[key]){
+    html += `<div class="section" id="historyPanel">
+      <div class="section-header">
+        <h3>Bisherige Einträge</h3>
+        <button type="button" class="btn-sm pick" onclick="loadLog('${key}')">Aktualisieren</button>
+      </div>
+      <div class="section-body" id="historyList"><p class="hint">Lade Protokoll…</p></div>
+    </div>`;
+  }
+
+  html += cl.sections.map(renderSection).join('');
   html += `<div class="section">
     <div class="section-header"><h3>${cl.signature.label}</h3></div>
     <div class="section-body">
@@ -4204,12 +4215,51 @@ function renderChecklist(key){
   document.getElementById('mainContent').innerHTML = html;
   window.scrollTo(0,0);
   initSignaturePad(cl.signature.id);
+
+  if(SHEET_LOG_CHECKLISTS[key]) loadLog(key);
+}
+
+async function loadLog(key){
+  const container = document.getElementById('historyList');
+  if(!container) return;
+  if(!GOOGLE_SHEET_WEBHOOK_URL || GOOGLE_SHEET_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0){
+    container.innerHTML = '<p class="hint">Google-Sheet-Adresse noch nicht eingetragen.</p>';
+    return;
+  }
+  container.innerHTML = '<p class="hint">Lade Protokoll…</p>';
+  try{
+    const res = await fetch(GOOGLE_SHEET_WEBHOOK_URL + '?checklist=' + encodeURIComponent(key));
+    const rows = await res.json();
+    if(!Array.isArray(rows) || rows.length === 0){
+      container.innerHTML = '<p class="hint">Noch keine Einträge vorhanden.</p>';
+      return;
+    }
+    const sorted = rows.slice().reverse().slice(0,20); // neueste zuerst, max 20
+    container.innerHTML = sorted.map(r=>{
+      const auffaellig = (r.rote_regale==='Ja' || r.schellenregal==='Ja');
+      const wer = r.kontrolleur_frei ? r.kontrolleur_frei : r.kontrolleur;
+      return `<div class="gallery-item" style="align-items:flex-start;">
+        <div style="flex:1;">
+          <div style="font-weight:700;color:${auffaellig?'var(--bad)':'var(--ok)'};">
+            ${escapeHtml(r.datum||'')} — ${auffaellig?'Auffällig':'Unauffällig'}
+          </div>
+          <div class="hint">Kontrolleur: ${escapeHtml(wer||'—')}</div>
+          ${r.rote_regale==='Ja' ? `<div class="hint">Rote Regale: ${escapeHtml(r.rote_regale_notiz||'(keine Notiz)')}</div>` : ''}
+          ${r.schellenregal==='Ja' ? `<div class="hint">Schellenregal: ${escapeHtml(r.schellenregal_notiz||'(keine Notiz)')}</div>` : ''}
+          ${r.verantwortlich ? `<div class="hint">Vermutlich zuletzt zurückgeräumt: ${escapeHtml(r.verantwortlich)}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  } catch(err){
+    container.innerHTML = '<p class="hint">Protokoll konnte nicht geladen werden — kein Internet?</p>';
+  }
 }
 
 function openChecklist(key){
   window.clearSignature = clearSignature;
   window.setChip = setChip;
   window.setValue = setValue;
+  window.loadLog = loadLog;
   currentChecklist = key;
   renderChecklist(key);
   document.getElementById('btnPdf').onclick = exportPdf;
