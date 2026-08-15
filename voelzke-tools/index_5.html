@@ -969,6 +969,7 @@
 <div class="bar" id="bottomBar" style="display:none;">
   <button class="btn-prev" id="btnPrev">← Zurück</button>
   <button class="btn-next" id="btnNext">Weiter →</button>
+  <button class="btn-pdf" id="btnLog" style="display:none;">Eintrag speichern</button>
   <button class="btn-pdf" id="btnPdf">PDF erzeugen</button>
 </div>
 
@@ -3820,6 +3821,46 @@ function text(id,label,hint){ return {type:'text', id, label, hint}; }
 function area(id,label,hint){ return {type:'textarea', id, label, hint}; }
 function dat(id,label){ return {type:'date', id, label}; }
 
+/* ============================================================
+   GOOGLE SHEET PROTOKOLL (nur für die Lagerkontrolle)
+   ============================================================ */
+// Nach dem Einrichten des Google Apps Script Web Apps hier die eigene
+// Deployment-URL eintragen (siehe Anleitung von Claude).
+const GOOGLE_SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbz2aGeHpPCiBRTGPnTyvyKZktvbto40O0aUEiYN8yU-oJNmR7DO8pU5slGwpGDKRsuohg/exec';
+
+const SHEET_LOG_CHECKLISTS = {
+  lager: {
+    fields: ['lg_kontrolleur','lg_kontrolleur_frei','lg_datum','lg_rote_regale','lg_rote_regale_notiz','lg_schellenregal','lg_schellenregal_notiz','lg_verantwortlich'],
+  }
+};
+
+async function submitToSheet(key){
+  const cfg = SHEET_LOG_CHECKLISTS[key];
+  if(!cfg) return;
+  if(!GOOGLE_SHEET_WEBHOOK_URL || GOOGLE_SHEET_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0){
+    showToast('Google-Sheet-Adresse noch nicht eingetragen');
+    return;
+  }
+  const payload = { checklist:key };
+  cfg.fields.forEach(f=>{ payload[f] = state.values[f] || ''; });
+
+  showToast('Speichere Eintrag…');
+  try{
+    await fetch(GOOGLE_SHEET_WEBHOOK_URL, {
+      method:'POST',
+      mode:'no-cors',
+      headers:{ 'Content-Type':'text/plain' },
+      body: JSON.stringify(payload),
+    });
+    // 'no-cors' liefert keine lesbare Antwort — wir gehen bei Erfolg des fetch-Aufrufs von einem erfolgreichen Versand aus.
+    cfg.fields.forEach(f=>{ delete state.values[f]; });
+    showToast('Eintrag im Protokoll gespeichert ✓');
+    renderChecklist(key);
+  } catch(err){
+    showToast('Fehler beim Speichern — kein Internet?');
+  }
+}
+
 const CHECKLISTS = {
 
   azubi: {
@@ -4172,6 +4213,14 @@ function openChecklist(key){
   currentChecklist = key;
   renderChecklist(key);
   document.getElementById('btnPdf').onclick = exportPdf;
+
+  const btnLog = document.getElementById('btnLog');
+  if(SHEET_LOG_CHECKLISTS[key]){
+    btnLog.style.display = '';
+    btnLog.onclick = ()=> submitToSheet(key);
+  } else {
+    btnLog.style.display = 'none';
+  }
 }
 
 /* ============================================================
@@ -4588,6 +4637,7 @@ function setChrome({ tabNav, bottomBar, prevNext, statusPill, back }){
   el('btnNext').style.display = prevNext ? '' : 'none';
   el('statusPill').style.display = statusPill ? '' : 'none';
   el('backBtn').style.display = back ? 'inline-block' : 'none';
+  el('btnLog').style.display = 'none'; // wird von der Checklisten-App bei Bedarf wieder eingeblendet
 }
 
 function showCategoryList(catKey){
