@@ -4045,9 +4045,35 @@ const CHECKLISTS = {
     signature: { id:'wk_unterschrift', label:'Unterschrift Monteur' },
   },
 
+  lager: {
+    icon:'📦',
+    title:'Lagerkontrolle',
+    desc:'Augenscheinliche Kontrolle auf Fehleinsortierung',
+    pdfTitle:'Checkliste Lagerkontrolle',
+    sections:[
+      { id:'kopf', title:'Kontrolle', fields:[
+        { type:'chip', id:'lg_kontrolleur', label:'Kontrolleur', options:['Niclas','Rüdiger','Björn','Kim','Erik','Julian'] },
+        text('lg_kontrolleur_frei','Anderer Name (falls nicht oben dabei)'),
+        dat('lg_datum','Datum'),
+      ]},
+      { id:'rote_regale', title:'Rote Regale (Kupferfittings)', fields:[
+        chip('lg_rote_regale','Augenscheinlich Fehleinsortierung?'),
+        area('lg_rote_regale_notiz','Was war falsch einsortiert und wo?'),
+      ]},
+      { id:'schellenregal', title:'Schellenregal', fields:[
+        chip('lg_schellenregal','Augenscheinlich Fehleinsortierung?'),
+        area('lg_schellenregal_notiz','Was war falsch einsortiert und wo?'),
+      ]},
+      { id:'zuordnung', title:'Zuordnung', fields:[
+        text('lg_verantwortlich','Wer hat zuletzt zurückgeräumt?','Vermutung anhand Plantafel'),
+      ]},
+    ],
+    signature: { id:'lg_unterschrift', label:'Unterschrift Kontrolleur' },
+  },
+
 };
 
-const HOME_ORDER = ['azubi','material','montage','ausstattung','werkzeugbus','werkzeugkiste'];
+const HOME_ORDER = ['azubi','material','montage','ausstattung','werkzeugbus','werkzeugkiste','lager'];
 
 /* ============================================================
    STATE
