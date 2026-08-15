@@ -3830,6 +3830,10 @@ function zeit(id,label){ return {type:'time', id, label}; }
 // Deployment-URL eintragen (siehe Anleitung von Claude).
 const GOOGLE_SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzAOfBdS3CChXh0_sAMbyzt5SFDVneykBjJ3HTeSzfyz1y1jRjWhPThTRkrUIcmaBHkbw/exec';
 
+// Eigenständiges Sheet/Script nur für die Lagerbestellungen (siehe apps-script-bestellungen.gs).
+// Nach dem Bereitstellen des Web Apps hier die eigene Deployment-URL eintragen.
+const BESTELLUNGEN_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbyVS7Wk2J-rnNj2r4-FTOdxeeP2NwfjYU11tJ1fcPomi1d9EQCyGlKhWdi7ZmjDrSrZ/exec';
+
 const SHEET_LOG_CHECKLISTS = {
   lager: {
     fields: ['lg_kontrolleur','lg_kontrolleur_frei','lg_datum','lg_uhrzeit','lg_rote_regale','lg_rote_regale_notiz','lg_schellenregal','lg_schellenregal_notiz','lg_verantwortlich'],
@@ -4280,12 +4284,11 @@ async function submitBestellung(){
   const feld = document.getElementById('bestellungInput');
   const text = (feld.value || '').trim();
   if(!text){ showToast('Bitte zuerst Text eingeben'); return; }
-  if(!GOOGLE_SHEET_WEBHOOK_URL || GOOGLE_SHEET_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0){
-    showToast('Google-Sheet-Adresse noch nicht eingetragen');
+  if(!BESTELLUNGEN_WEBHOOK_URL || BESTELLUNGEN_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0){
+    showToast('Bestellungen-Sheet-Adresse noch nicht eingetragen');
     return;
   }
   const eintrag = {
-    checklist: 'bestellung',
     action: 'create',
     id: bestellungUuid(),
     text,
@@ -4293,7 +4296,7 @@ async function submitBestellung(){
   };
   showToast('Speichere Eintrag…');
   try{
-    await fetch(GOOGLE_SHEET_WEBHOOK_URL, {
+    await fetch(BESTELLUNGEN_WEBHOOK_URL, {
       method:'POST',
       mode:'no-cors',
       headers:{ 'Content-Type':'text/plain' },
@@ -4309,13 +4312,13 @@ async function submitBestellung(){
 
 async function toggleBestellung(id, checked){
   // Optimistisch: UI-Status wurde durch die Checkbox bereits geändert.
-  if(!GOOGLE_SHEET_WEBHOOK_URL || GOOGLE_SHEET_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0) return;
+  if(!BESTELLUNGEN_WEBHOOK_URL || BESTELLUNGEN_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0) return;
   try{
-    await fetch(GOOGLE_SHEET_WEBHOOK_URL, {
+    await fetch(BESTELLUNGEN_WEBHOOK_URL, {
       method:'POST',
       mode:'no-cors',
       headers:{ 'Content-Type':'text/plain' },
-      body: JSON.stringify({ checklist:'bestellung', action:'toggle', id, bestellt: checked ? 'Ja' : 'Nein' }),
+      body: JSON.stringify({ action:'toggle', id, bestellt: checked ? 'Ja' : 'Nein' }),
     });
     showToast(checked ? 'Als bestellt markiert ✓' : 'Markierung entfernt');
   } catch(err){
@@ -4331,23 +4334,20 @@ function toggleBestellungenBestellte(checked){
 async function loadBestellungen(){
   const container = document.getElementById('bestellungListe');
   if(!container) return;
-  if(!GOOGLE_SHEET_WEBHOOK_URL || GOOGLE_SHEET_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0){
-    container.innerHTML = '<p class="hint">Google-Sheet-Adresse noch nicht eingetragen.</p>';
+  if(!BESTELLUNGEN_WEBHOOK_URL || BESTELLUNGEN_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0){
+    container.innerHTML = '<p class="hint">Bestellungen-Sheet-Adresse noch nicht eingetragen.</p>';
     return;
   }
   container.innerHTML = '<p class="hint">Lade Einträge…</p>';
   try{
-    const res = await fetch(GOOGLE_SHEET_WEBHOOK_URL + '?checklist=bestellung');
+    const res = await fetch(BESTELLUNGEN_WEBHOOK_URL);
     const rows = await res.json();
     if(!Array.isArray(rows) || rows.length === 0){
       container.innerHTML = '<p class="hint">Noch keine Einträge vorhanden.</p>';
       return;
     }
     const sortiert = rows.slice().reverse(); // neueste zuerst
-    if(sortiert.length){
-      console.log('[Lagerbestellungen] Beispiel-Zeile vom Sheet:', sortiert[0]); // Hilfe zur Fehlersuche, F12 -> Konsole
-    }
-    const aktuelle = sortiert.filter(r => bestellungenZeigeBestellte || bestellungWert(r,'bestellt') !== 'Ja');
+    const aktuelle = sortiert.filter(r => bestellungenZeigeBestellte || r.bestellt !== 'Ja');
     const bestelltAnzahl = sortiert.length - aktuelle.length;
 
     if(aktuelle.length === 0){
@@ -4356,16 +4356,14 @@ async function loadBestellungen(){
     }
 
     container.innerHTML = aktuelle.map(r=>{
-      const erstelltRoh = bestellungWert(r,'erstellt');
-      const datum = erstelltRoh ? new Date(erstelltRoh) : null;
+      const datum = r.erstellt ? new Date(r.erstellt) : null;
       const datumStr = (datum && !isNaN(datum.getTime()))
         ? datum.toLocaleDateString('de-DE') + ' · ' + datum.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) + ' Uhr'
-        : (erstelltRoh || '');
-      const bestellt = bestellungWert(r,'bestellt') === 'Ja';
-      const text = bestellungWert(r,'text');
+        : (r.erstellt || '');
+      const bestellt = r.bestellt === 'Ja';
       return `<div class="gallery-item" style="align-items:flex-start;">
         <div style="flex:1;">
-          <div style="font-weight:700;color:var(--blue-dark);${bestellt?'text-decoration:line-through;opacity:.6;':''}">${escapeHtml(text || '(kein Text übermittelt)')}</div>
+          <div style="font-weight:700;color:var(--blue-dark);${bestellt?'text-decoration:line-through;opacity:.6;':''}">${escapeHtml(r.text || '(kein Text übermittelt)')}</div>
           <div class="hint">${escapeHtml(datumStr || 'kein Zeitstempel übermittelt')}</div>
         </div>
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#33475a;flex:none;">
@@ -4377,20 +4375,6 @@ async function loadBestellungen(){
   } catch(err){
     container.innerHTML = '<p class="hint">Einträge konnten nicht geladen werden — kein Internet?</p>';
   }
-}
-
-// Liest ein Feld robust aus einer Sheet-Zeile aus, unabhängig von Groß-/Kleinschreibung
-// oder eventuellen Präfixen/Suffixen in der Spaltenüberschrift (Hilfe zur Fehlersuche).
-function bestellungWert(row, feld){
-  if(row[feld] !== undefined && row[feld] !== '') return row[feld];
-  const gesucht = feld.toLowerCase();
-  for(const key in row){
-    if(key.toLowerCase() === gesucht && row[key] !== '') return row[key];
-  }
-  for(const key in row){
-    if(key.toLowerCase().includes(gesucht) && row[key] !== '') return row[key];
-  }
-  return '';
 }
 
 function openBestellungen(){
