@@ -4861,6 +4861,15 @@ function showHome(){
   wrap.querySelectorAll('.cl-card').forEach(btn=>{
     btn.addEventListener('click', ()=> showCategoryList(btn.dataset.key));
   });
+  window.scrollTo(0,0);
+  // Zusätzlicher Repaint-Kick: manche iOS/Safari-Versionen zeichnen per JS
+  // eingefügte DOM-Änderungen erst nach einem Scroll/Touch-Ereignis neu.
+  // Das hat bisher dazu geführt, dass beim Öffnen der App (Homescreen) ein
+  // weißer Bildschirm zu sehen war, bis man irgendwo getippt hat.
+  requestAnimationFrame(()=>{
+    document.body.style.transform = 'translateZ(0)';
+    requestAnimationFrame(()=>{ document.body.style.transform = ''; });
+  });
 }
 
 function setChrome({ tabNav, bottomBar, prevNext, statusPill, back }){
