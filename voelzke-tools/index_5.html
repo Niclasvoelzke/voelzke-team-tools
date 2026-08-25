@@ -1649,7 +1649,7 @@ function renderPhotosTab(){
         <div id="galleryList">${galleryHtml}</div>
         <label class="add-photo-btn">
           + Foto hinzufügen
-          <input type="file" accept="image/*" onchange="addGalleryPhoto(this)">
+          <input type="file" accept="image/*" multiple onchange="addGalleryPhoto(this)">
         </label>
       </div>
     </div>
@@ -1663,7 +1663,8 @@ function renderTabNav(){
   ).join('');
 }
 
-function renderTabContent(){
+function renderTabContent(keepScroll){
+  const scrollY = window.scrollY;
   const tab = CONFIG.tabs[currentTabIndex];
   const main = document.getElementById('mainContent');
   if(tab.special === 'photos'){
@@ -1674,7 +1675,9 @@ function renderTabContent(){
   }
   document.getElementById('btnPrev').style.visibility = currentTabIndex===0 ? 'hidden':'visible';
   document.getElementById('btnNext').textContent = currentTabIndex===CONFIG.tabs.length-1 ? 'Fertig ✓' : 'Weiter →';
-  window.scrollTo(0,0);
+  // Bei Tab-Wechsel nach oben springen; bei Änderungen innerhalb des Tabs (Foto hinzufügen,
+  // Haken setzen o.ä.) die bisherige Scroll-Position beibehalten statt nach oben zu springen.
+  window.scrollTo(0, keepScroll ? scrollY : 0);
 }
 
 function goToTab(i){
@@ -1710,31 +1713,117 @@ function toggleEntfaellt(sectionId, checked){
 function fileToDataUrl(fileInput, cb){
   const file = fileInput.files && fileInput.files[0];
   if(!file) return;
+  correctImageOrientation(file, cb);
+}
+
+// Handy-Fotos (Hochformat) tragen oft ein EXIF-Orientation-Tag statt die Pixel
+// wirklich gedreht zu speichern. Ohne Korrektur landen sie seitlich verdreht im PDF.
+// Hier: Orientation auslesen und das Bild vor dem Speichern per Canvas passend drehen.
+function correctImageOrientation(file, cb){
+  readExifOrientation(file, orientation => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const dataUrl = e.target.result;
+      if(orientation <= 1){ cb(dataUrl); return; }
+      const img = new Image();
+      img.onload = () => {
+        const w = img.width, h = img.height;
+        const swap = orientation >= 5 && orientation <= 8;
+        const canvas = document.createElement('canvas');
+        canvas.width = swap ? h : w;
+        canvas.height = swap ? w : h;
+        const ctx = canvas.getContext('2d');
+        switch(orientation){
+          case 2: ctx.transform(-1,0,0,1,w,0); break;
+          case 3: ctx.transform(-1,0,0,-1,w,h); break;
+          case 4: ctx.transform(1,0,0,-1,0,h); break;
+          case 5: ctx.transform(0,1,1,0,0,0); break;
+          case 6: ctx.transform(0,1,-1,0,h,0); break;
+          case 7: ctx.transform(0,-1,-1,0,h,w); break;
+          case 8: ctx.transform(0,-1,1,0,0,w); break;
+        }
+        ctx.drawImage(img,0,0);
+        cb(canvas.toDataURL('image/jpeg', 0.92));
+      };
+      img.onerror = () => cb(dataUrl);
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Liest das EXIF-Orientation-Tag (0x0112) direkt aus den JPEG-Bytes.
+// Nur JPEG hat das Problem; bei anderen Formaten liefert es 1 (= normal).
+function readExifOrientation(file, cb){
+  if(!file.type || file.type !== 'image/jpeg'){ cb(1); return; }
   const reader = new FileReader();
-  reader.onload = e => cb(e.target.result);
-  reader.readAsDataURL(file);
+  reader.onload = e => {
+    try{
+      const view = new DataView(e.target.result);
+      if(view.getUint16(0, false) !== 0xFFD8){ cb(1); return; }
+      let offset = 2;
+      const length = view.byteLength;
+      while(offset < length){
+        const marker = view.getUint16(offset, false);
+        offset += 2;
+        if(marker === 0xFFE1){
+          if(view.getUint32(offset+2, false) !== 0x45786966){ cb(1); return; }
+          const tiffOffset = offset + 8;
+          const little = view.getUint16(tiffOffset, false) === 0x4949;
+          const firstIFDOffset = view.getUint32(tiffOffset+4, little);
+          const dirStart = tiffOffset + firstIFDOffset;
+          const entries = view.getUint16(dirStart, little);
+          for(let i=0;i<entries;i++){
+            const entryOffset = dirStart + 2 + i*12;
+            if(view.getUint16(entryOffset, little) === 0x0112){
+              cb(view.getUint16(entryOffset+8, little));
+              return;
+            }
+          }
+          cb(1); return;
+        } else if((marker & 0xFF00) !== 0xFF00){
+          break;
+        } else {
+          offset += view.getUint16(offset, false);
+        }
+      }
+    } catch(err){}
+    cb(1);
+  };
+  reader.readAsArrayBuffer(file.slice(0, 131072));
 }
 
 function setNamedPhoto(id, input){
   fileToDataUrl(input, dataUrl=>{
     state.namedPhotos[id] = dataUrl;
-    renderTabContent();
+    renderTabContent(true);
     showToast('Foto gespeichert');
   });
 }
 function removeNamedPhoto(id){
   delete state.namedPhotos[id];
-  renderTabContent();
+  renderTabContent(true);
 }
-function addGalleryPhoto(input){
-  fileToDataUrl(input, dataUrl=>{
-    state.gallery.push({caption:'', dataUrl});
-    renderTabContent();
+function addGalleryPhoto(input, defaultCaption){
+  // Mehrere Fotos auf einmal auswählen statt einzeln nacheinander.
+  const files = input.files ? Array.from(input.files) : [];
+  if(!files.length) return;
+  let remaining = files.length;
+  files.forEach(file=>{
+    correctImageOrientation(file, dataUrl=>{
+      state.gallery.push({caption: defaultCaption || '', dataUrl});
+      remaining--;
+      if(remaining === 0){
+        renderTabContent(true);
+        showToast(files.length > 1 ? files.length+' Fotos hinzugefügt' : 'Foto hinzugefügt');
+      }
+    });
   });
+  input.value = '';
 }
 function removeGalleryPhoto(i){
   state.gallery.splice(i,1);
-  renderTabContent();
+  renderTabContent(true);
 }
 function setGalleryCaption(i,val){ state.gallery[i].caption = val; }
 
@@ -2273,7 +2362,7 @@ function renderSignaturesTab(){
         <div id="galleryList">${galleryHtml}</div>
         <label class="add-photo-btn">
           + Foto hinzufügen
-          <input type="file" accept="image/*" onchange="addGalleryPhoto(this)">
+          <input type="file" accept="image/*" multiple onchange="addGalleryPhoto(this)">
         </label>
       </div>
     </div>
@@ -2403,7 +2492,8 @@ function renderTabNav(){
   ).join('');
 }
 
-function renderTabContent(){
+function renderTabContent(keepScroll){
+  const scrollY = window.scrollY;
   const tab = CONFIG.tabs[currentTabIndex];
   const main = document.getElementById('mainContent');
   if(tab.special === 'signatures'){
@@ -2416,7 +2506,7 @@ function renderTabContent(){
   }
   document.getElementById('btnPrev').style.visibility = currentTabIndex===0 ? 'hidden':'visible';
   document.getElementById('btnNext').textContent = currentTabIndex===CONFIG.tabs.length-1 ? 'Fertig ✓' : 'Weiter →';
-  window.scrollTo(0,0);
+  window.scrollTo(0, keepScroll ? scrollY : 0);
 }
 
 function goToTab(i){
@@ -2445,7 +2535,7 @@ function setChip(id,val){
 }
 function setToggle(id){
   state.values[id] = state.values[id] === 'Ja' ? '' : 'Ja';
-  renderTabContent();
+  renderTabContent(true);
 }
 function toggleEntfaellt(sectionId, checked){
   state.entfaellt[sectionId] = checked;
@@ -2456,20 +2546,106 @@ function toggleEntfaellt(sectionId, checked){
 function fileToDataUrl(fileInput, cb){
   const file = fileInput.files && fileInput.files[0];
   if(!file) return;
-  const reader = new FileReader();
-  reader.onload = e => cb(e.target.result);
-  reader.readAsDataURL(file);
+  correctImageOrientation(file, cb);
 }
 
-function addGalleryPhoto(input){
-  fileToDataUrl(input, dataUrl=>{
-    state.gallery.push({caption:'', dataUrl});
-    renderTabContent();
+// Handy-Fotos (Hochformat) tragen oft ein EXIF-Orientation-Tag statt die Pixel
+// wirklich gedreht zu speichern. Ohne Korrektur landen sie seitlich verdreht im PDF.
+// Hier: Orientation auslesen und das Bild vor dem Speichern per Canvas passend drehen.
+function correctImageOrientation(file, cb){
+  readExifOrientation(file, orientation => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const dataUrl = e.target.result;
+      if(orientation <= 1){ cb(dataUrl); return; }
+      const img = new Image();
+      img.onload = () => {
+        const w = img.width, h = img.height;
+        const swap = orientation >= 5 && orientation <= 8;
+        const canvas = document.createElement('canvas');
+        canvas.width = swap ? h : w;
+        canvas.height = swap ? w : h;
+        const ctx = canvas.getContext('2d');
+        switch(orientation){
+          case 2: ctx.transform(-1,0,0,1,w,0); break;
+          case 3: ctx.transform(-1,0,0,-1,w,h); break;
+          case 4: ctx.transform(1,0,0,-1,0,h); break;
+          case 5: ctx.transform(0,1,1,0,0,0); break;
+          case 6: ctx.transform(0,1,-1,0,h,0); break;
+          case 7: ctx.transform(0,-1,-1,0,h,w); break;
+          case 8: ctx.transform(0,-1,1,0,0,w); break;
+        }
+        ctx.drawImage(img,0,0);
+        cb(canvas.toDataURL('image/jpeg', 0.92));
+      };
+      img.onerror = () => cb(dataUrl);
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
   });
+}
+
+// Liest das EXIF-Orientation-Tag (0x0112) direkt aus den JPEG-Bytes.
+// Nur JPEG hat das Problem; bei anderen Formaten liefert es 1 (= normal).
+function readExifOrientation(file, cb){
+  if(!file.type || file.type !== 'image/jpeg'){ cb(1); return; }
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{
+      const view = new DataView(e.target.result);
+      if(view.getUint16(0, false) !== 0xFFD8){ cb(1); return; }
+      let offset = 2;
+      const length = view.byteLength;
+      while(offset < length){
+        const marker = view.getUint16(offset, false);
+        offset += 2;
+        if(marker === 0xFFE1){
+          if(view.getUint32(offset+2, false) !== 0x45786966){ cb(1); return; }
+          const tiffOffset = offset + 8;
+          const little = view.getUint16(tiffOffset, false) === 0x4949;
+          const firstIFDOffset = view.getUint32(tiffOffset+4, little);
+          const dirStart = tiffOffset + firstIFDOffset;
+          const entries = view.getUint16(dirStart, little);
+          for(let i=0;i<entries;i++){
+            const entryOffset = dirStart + 2 + i*12;
+            if(view.getUint16(entryOffset, little) === 0x0112){
+              cb(view.getUint16(entryOffset+8, little));
+              return;
+            }
+          }
+          cb(1); return;
+        } else if((marker & 0xFF00) !== 0xFF00){
+          break;
+        } else {
+          offset += view.getUint16(offset, false);
+        }
+      }
+    } catch(err){}
+    cb(1);
+  };
+  reader.readAsArrayBuffer(file.slice(0, 131072));
+}
+
+function addGalleryPhoto(input, defaultCaption){
+  // Mehrere Fotos auf einmal auswählen statt einzeln nacheinander.
+  const files = input.files ? Array.from(input.files) : [];
+  if(!files.length) return;
+  let remaining = files.length;
+  files.forEach(file=>{
+    correctImageOrientation(file, dataUrl=>{
+      state.gallery.push({caption: defaultCaption || '', dataUrl});
+      remaining--;
+      if(remaining === 0){
+        renderTabContent(true);
+        showToast(files.length > 1 ? files.length+' Fotos hinzugefügt' : 'Foto hinzugefügt');
+      }
+    });
+  });
+  input.value = '';
 }
 function removeGalleryPhoto(i){
   state.gallery.splice(i,1);
-  renderTabContent();
+  renderTabContent(true);
 }
 function setGalleryCaption(i,val){ state.gallery[i].caption = val; }
 
@@ -3049,7 +3225,14 @@ function renderKesselTab(tab){
     </div>
     <div class="section ${isOff?'is-entfaellt':''}">
       <div class="section-header"><h3>Messwerte</h3></div>
-      <div class="section-body">${renderMeasureTable(prefix+'_mw')}</div>
+      <div class="section-body">
+        <p class="subtitle" style="margin-top:-4px;">Entweder Werte einzeln eintragen oder einfach ein Foto vom Abgasmesszettel hochladen</p>
+        ${renderMeasureTable(prefix+'_mw')}
+        <label class="add-photo-btn" style="margin-top:10px;">
+          + Foto vom Abgasmesszettel statt Einzelwerten
+          <input type="file" accept="image/*" multiple onchange="addGalleryPhoto(this, 'Abgasmesszettel Kessel ${num_}')">
+        </label>
+      </div>
     </div>
     <div class="section ${isOff?'is-entfaellt':''}">
       <div class="section-header"><h3>Kesselparameter</h3></div>
@@ -3137,7 +3320,7 @@ function renderAbschlussTab(){
         <div id="galleryList">${galleryHtml}</div>
         <label class="add-photo-btn">
           + Foto hinzufügen
-          <input type="file" accept="image/*" onchange="addGalleryPhoto(this)">
+          <input type="file" accept="image/*" multiple onchange="addGalleryPhoto(this)">
         </label>
       </div>
     </div>
@@ -3259,7 +3442,8 @@ function renderTabNav(){
   ).join('');
 }
 
-function renderTabContent(){
+function renderTabContent(keepScroll){
+  const scrollY = window.scrollY;
   const tab = CONFIG.tabs[currentTabIndex];
   const main = document.getElementById('mainContent');
   if(tab.special === 'abschluss'){
@@ -3278,7 +3462,7 @@ function renderTabContent(){
   }
   document.getElementById('btnPrev').style.visibility = currentTabIndex===0 ? 'hidden':'visible';
   document.getElementById('btnNext').textContent = currentTabIndex===CONFIG.tabs.length-1 ? 'Fertig ✓' : 'Weiter →';
-  window.scrollTo(0,0);
+  window.scrollTo(0, keepScroll ? scrollY : 0);
 }
 
 function goToTab(i){
@@ -3307,23 +3491,23 @@ function setChip(id,val){
 }
 function setToggle(id){
   state.values[id] = state.values[id] === 'Ja' ? '' : 'Ja';
-  renderTabContent();
+  renderTabContent(true);
 }
 function toggleMulti(id, opt){
   const arr = state.values[id] ? state.values[id].slice() : [];
   const idx = arr.indexOf(opt);
   if(idx >= 0) arr.splice(idx,1); else arr.push(opt);
   state.values[id] = arr;
-  renderTabContent();
+  renderTabContent(true);
 }
 function addParamRow(id){
   if(!state.values[id]) state.values[id] = [];
   state.values[id].push({param:'', werk:'', geaendert:''});
-  renderTabContent();
+  renderTabContent(true);
 }
 function removeParamRow(id, i){
   state.values[id].splice(i,1);
-  renderTabContent();
+  renderTabContent(true);
 }
 function updateParamRow(id, i, field, val){
   state.values[id][i][field] = val;
@@ -3337,20 +3521,106 @@ function toggleEntfaellt(sectionId, checked){
 function fileToDataUrl(fileInput, cb){
   const file = fileInput.files && fileInput.files[0];
   if(!file) return;
-  const reader = new FileReader();
-  reader.onload = e => cb(e.target.result);
-  reader.readAsDataURL(file);
+  correctImageOrientation(file, cb);
 }
 
-function addGalleryPhoto(input){
-  fileToDataUrl(input, dataUrl=>{
-    state.gallery.push({caption:'', dataUrl});
-    renderTabContent();
+// Handy-Fotos (Hochformat) tragen oft ein EXIF-Orientation-Tag statt die Pixel
+// wirklich gedreht zu speichern. Ohne Korrektur landen sie seitlich verdreht im PDF.
+// Hier: Orientation auslesen und das Bild vor dem Speichern per Canvas passend drehen.
+function correctImageOrientation(file, cb){
+  readExifOrientation(file, orientation => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const dataUrl = e.target.result;
+      if(orientation <= 1){ cb(dataUrl); return; }
+      const img = new Image();
+      img.onload = () => {
+        const w = img.width, h = img.height;
+        const swap = orientation >= 5 && orientation <= 8;
+        const canvas = document.createElement('canvas');
+        canvas.width = swap ? h : w;
+        canvas.height = swap ? w : h;
+        const ctx = canvas.getContext('2d');
+        switch(orientation){
+          case 2: ctx.transform(-1,0,0,1,w,0); break;
+          case 3: ctx.transform(-1,0,0,-1,w,h); break;
+          case 4: ctx.transform(1,0,0,-1,0,h); break;
+          case 5: ctx.transform(0,1,1,0,0,0); break;
+          case 6: ctx.transform(0,1,-1,0,h,0); break;
+          case 7: ctx.transform(0,-1,-1,0,h,w); break;
+          case 8: ctx.transform(0,-1,1,0,0,w); break;
+        }
+        ctx.drawImage(img,0,0);
+        cb(canvas.toDataURL('image/jpeg', 0.92));
+      };
+      img.onerror = () => cb(dataUrl);
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
   });
+}
+
+// Liest das EXIF-Orientation-Tag (0x0112) direkt aus den JPEG-Bytes.
+// Nur JPEG hat das Problem; bei anderen Formaten liefert es 1 (= normal).
+function readExifOrientation(file, cb){
+  if(!file.type || file.type !== 'image/jpeg'){ cb(1); return; }
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{
+      const view = new DataView(e.target.result);
+      if(view.getUint16(0, false) !== 0xFFD8){ cb(1); return; }
+      let offset = 2;
+      const length = view.byteLength;
+      while(offset < length){
+        const marker = view.getUint16(offset, false);
+        offset += 2;
+        if(marker === 0xFFE1){
+          if(view.getUint32(offset+2, false) !== 0x45786966){ cb(1); return; }
+          const tiffOffset = offset + 8;
+          const little = view.getUint16(tiffOffset, false) === 0x4949;
+          const firstIFDOffset = view.getUint32(tiffOffset+4, little);
+          const dirStart = tiffOffset + firstIFDOffset;
+          const entries = view.getUint16(dirStart, little);
+          for(let i=0;i<entries;i++){
+            const entryOffset = dirStart + 2 + i*12;
+            if(view.getUint16(entryOffset, little) === 0x0112){
+              cb(view.getUint16(entryOffset+8, little));
+              return;
+            }
+          }
+          cb(1); return;
+        } else if((marker & 0xFF00) !== 0xFF00){
+          break;
+        } else {
+          offset += view.getUint16(offset, false);
+        }
+      }
+    } catch(err){}
+    cb(1);
+  };
+  reader.readAsArrayBuffer(file.slice(0, 131072));
+}
+
+function addGalleryPhoto(input, defaultCaption){
+  // Mehrere Fotos auf einmal auswählen statt einzeln nacheinander.
+  const files = input.files ? Array.from(input.files) : [];
+  if(!files.length) return;
+  let remaining = files.length;
+  files.forEach(file=>{
+    correctImageOrientation(file, dataUrl=>{
+      state.gallery.push({caption: defaultCaption || '', dataUrl});
+      remaining--;
+      if(remaining === 0){
+        renderTabContent(true);
+        showToast(files.length > 1 ? files.length+' Fotos hinzugefügt' : 'Foto hinzugefügt');
+      }
+    });
+  });
+  input.value = '';
 }
 function removeGalleryPhoto(i){
   state.gallery.splice(i,1);
-  renderTabContent();
+  renderTabContent(true);
 }
 function setGalleryCaption(i,val){ state.gallery[i].caption = val; }
 
@@ -4879,7 +5149,7 @@ function renderEntriesView(){
     const d = fachData[fach] || {text:'', voll:'Nein'};
     return `
     <div class="section" id="lagerfach_${fach}">
-      <div class="section-header"><h3>Lager ${fach}</h3></div>
+      <div class="section-header"><h3>Fach ${fach}</h3></div>
       <div class="section-body">
         <div class="field">
           <textarea oninput="lagerHugoSetText('${fach}', this.value)" placeholder="Inhalt...">${escapeHtml(d.text||'')}</textarea>
@@ -5015,6 +5285,7 @@ const TOOL_CATALOG = {
       { key:'rote_halle', icon:'🔴', title:'Rote Halle', desc:'Lagerkontrolle & Protokoll' },
       { key:'hugo',        icon:'🏬', title:'Hugo',        desc:'Lagerhaltung erfassen & Übersicht' },
       { key:'neubau',       icon:'🏗️', title:'Neubau',      desc:'Demnächst verfügbar' },
+      { key:'bestellungen', icon:'📝', title:'Lagerbestellungen', desc:'Benötigtes Material erfassen & Bestellstatus abhaken' },
     ]
   }
 };
@@ -5047,14 +5318,6 @@ function initApps(){
       const cl = shellChecklistenApp.CHECKLISTS[key];
       return { key, icon: cl.icon, title: cl.title, desc: cl.desc };
     });
-
-  // Extra-Kachel: Lagerbestellungen (Freitext-Bedarf mit "bestellt"-Haken)
-  TOOL_CATALOG.checklisten.items.push({
-    key: 'bestellungen',
-    icon: '📝',
-    title: 'Lagerbestellungen',
-    desc: 'Benötigtes Material erfassen & Bestellstatus abhaken'
-  });
 }
 
 function showHome(){
@@ -5115,17 +5378,17 @@ function showCategoryList(catKey){
     btn.addEventListener('click', ()=>{
       if(catKey === 'ibn') openIbnTool(btn.dataset.key);
       else if(catKey === 'lager') openLagerTool(btn.dataset.key);
-      else if(btn.dataset.key === 'bestellungen') openBestellungen();
       else openChecklistTool(btn.dataset.key);
     });
   });
 }
 
-/* ---- Lager-Kategorie: Rote Halle (Checkliste + Protokoll), Hugo, Neubau ---- */
+/* ---- Lager-Kategorie: Rote Halle (Checkliste + Protokoll), Hugo, Neubau, Bestellungen ---- */
 function openLagerTool(key){
   if(key === 'hugo') openLagerHugo();
   else if(key === 'rote_halle') showRoteHalleList();
   else if(key === 'neubau') showNeubauPlaceholder();
+  else if(key === 'bestellungen') openBestellungen();
 }
 
 function showRoteHalleList(){
@@ -5173,7 +5436,7 @@ function openLagerHugo(){
 }
 
 function openBestellungen(){
-  currentBack = () => showCategoryList('checklisten');
+  currentBack = () => showCategoryList('lager');
   setChrome({ tabNav:false, bottomBar:false, prevNext:false, statusPill:false, back:true });
   shellChecklistenApp.openBestellungen();
 }
