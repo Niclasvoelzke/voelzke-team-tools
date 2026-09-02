@@ -1538,7 +1538,7 @@ const CONFIG = {
         chip('ab_pflegehinweise','Tipps und Hinweise zur Pflege gegeben'),
       ]},
     ]},
-    { id:'fotos', label:'Bemerkungen & Fotos', special:'photos' },
+    { id:'fotos', label:'Bemerkungen, Fotos & Unterschrift', special:'photos' },
   ]
 };
 
@@ -1653,7 +1653,123 @@ function renderPhotosTab(){
         </label>
       </div>
     </div>
+
+    <div class="section">
+      <div class="section-header"><h3>Bestätigung</h3></div>
+      <div class="section-body">
+        <div class="confirm-box">Hiermit bestätige ich die Richtigkeit der oben genannten Angaben.</div>
+
+        <div class="field">
+          <label>Unterschrift Kunde</label>
+          <div class="sig-wrap">
+            <canvas id="sigcanvas_kunde_unterschrift"></canvas>
+            <div class="sig-toolbar"><span>mit Finger/Stift unterschreiben</span><button type="button" class="sig-clear" onclick="clearSignature('kunde_unterschrift')">Löschen</button></div>
+          </div>
+        </div>
+        <div class="field">
+          <label>Datum (Kunde)</label>
+          <input type="date" value="${escapeHtml(state.values['kunde_datum']||'')}" oninput="setValue('kunde_datum',this.value)">
+        </div>
+
+        <div class="field">
+          <label>Unterschrift Techniker</label>
+          <div class="sig-wrap">
+            <canvas id="sigcanvas_techniker_unterschrift"></canvas>
+            <div class="sig-toolbar"><span>mit Finger/Stift unterschreiben</span><button type="button" class="sig-clear" onclick="clearSignature('techniker_unterschrift')">Löschen</button></div>
+          </div>
+        </div>
+        <div class="field">
+          <label>Datum (Techniker)</label>
+          <input type="date" value="${escapeHtml(state.values['techniker_datum']||'')}" oninput="setValue('techniker_datum',this.value)">
+        </div>
+      </div>
+    </div>
   `;
+}
+
+/* ---- Unterschriftsfeld: Canvas-Logik (resize-sicher) ---- */
+const signaturePads = {}; // id -> {canvas, ctx, drawing, hasInk}
+
+function initSignaturePad(id){
+  const canvas = document.getElementById('sigcanvas_'+id);
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const pad = { canvas, ctx, drawing:false, hasInk: !!state.values[id] };
+  signaturePads[id] = pad;
+
+  sizeCanvas(id, true);
+
+  function pos(e){
+    const rect = canvas.getBoundingClientRect();
+    const p = e.touches ? e.touches[0] : e;
+    return { x: p.clientX - rect.left, y: p.clientY - rect.top };
+  }
+  function start(e){ e.preventDefault(); pad.drawing = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); }
+  function move(e){
+    if(!pad.drawing) return;
+    e.preventDefault();
+    const p = pos(e);
+    ctx.lineWidth = 2.2; ctx.lineCap='round'; ctx.strokeStyle = '#1b2733';
+    ctx.lineTo(p.x,p.y); ctx.stroke();
+    pad.hasInk = true;
+  }
+  function end(){
+    if(!pad.drawing) return;
+    pad.drawing = false;
+    state.values[id] = pad.hasInk ? canvas.toDataURL('image/png') : '';
+  }
+  canvas.addEventListener('mousedown', start);
+  canvas.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', end);
+  canvas.addEventListener('touchstart', start, {passive:false});
+  canvas.addEventListener('touchmove', move, {passive:false});
+  canvas.addEventListener('touchend', end);
+}
+
+// Resize-sicher: Zeichnung vor Resize sichern (dataURL), danach wiederherstellen.
+// Verhindert, dass ein Tastatur-Ein-/Ausblenden (iPad) die Unterschrift unbemerkt löscht.
+let resizeTimer = null;
+function sizeCanvas(id, isInit){
+  const pad = signaturePads[id];
+  if(!pad) return;
+  const canvas = pad.canvas;
+  const cssW = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const cssH = 150;
+  const dpr = window.devicePixelRatio || 1;
+  const newW = Math.round(cssW*dpr), newH = Math.round(cssH*dpr);
+  if(canvas.width === newW && canvas.height === newH && !isInit) return; // keine echte Größenänderung
+
+  const prevDataUrl = state.values[id] || null;
+  canvas.width = newW;
+  canvas.height = newH;
+  const ctx = pad.ctx;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0,0,cssW,cssH);
+
+  if(prevDataUrl){
+    const img = new Image();
+    img.onload = ()=>{ ctx.drawImage(img,0,0,cssW,cssH); };
+    img.src = prevDataUrl;
+  }
+}
+window.addEventListener('resize', ()=>{
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(()=>{
+    Object.keys(signaturePads).forEach(id=>sizeCanvas(id,false));
+  }, 200);
+});
+
+function clearSignature(id){
+  const pad = signaturePads[id];
+  if(!pad) return;
+  const canvas = pad.canvas, ctx = pad.ctx;
+  const cssW = canvas.clientWidth, cssH = 150;
+  ctx.setTransform(window.devicePixelRatio||1,0,0,window.devicePixelRatio||1,0,0);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0,0,cssW,cssH);
+  pad.hasInk = false;
+  state.values[id] = '';
 }
 
 function renderTabNav(){
@@ -1669,6 +1785,8 @@ function renderTabContent(keepScroll){
   const main = document.getElementById('mainContent');
   if(tab.special === 'photos'){
     main.innerHTML = renderPhotosTab();
+    initSignaturePad('kunde_unterschrift');
+    initSignaturePad('techniker_unterschrift');
   } else {
     main.innerHTML = tab.sections.map(renderSection).join('') +
       `<div class="final-note">Tab ${currentTabIndex+1} von ${CONFIG.tabs.length}</div>`;
@@ -2052,6 +2170,55 @@ function buildPdf(){
   });
   drawStamp();
 
+  // ---- Bestätigung & Unterschriften ----
+  newPage();
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(13);
+  doc.setTextColor(COL_BLUE[0],COL_BLUE[1],COL_BLUE[2]);
+  doc.text('Bestätigung & Unterschriften', MARGIN, y);
+  y += 9;
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(10);
+  doc.setTextColor(COL_TEXT[0],COL_TEXT[1],COL_TEXT[2]);
+  doc.text('Hiermit wird die Richtigkeit der oben genannten Angaben bestätigt.', MARGIN, y);
+  y += 12;
+
+  function signatureBlock(label, sigId, dateId){
+    ensure(46);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(10);
+    doc.setTextColor(COL_BLUE[0],COL_BLUE[1],COL_BLUE[2]);
+    doc.text(label, MARGIN, y);
+    y += 5;
+    const sigVal = state.values[sigId];
+    const boxW = PAGE_W-2*MARGIN, boxH = 30;
+    doc.setDrawColor(COL_LINE[0],COL_LINE[1],COL_LINE[2]);
+    doc.setFillColor(255,255,255);
+    doc.rect(MARGIN, y, boxW, boxH, 'S');
+    if(sigVal){
+      try{
+        const dims = getImageDimensions(sigVal);
+        const ratio = Math.min((boxW-6)/dims.w, (boxH-6)/dims.h);
+        const w = dims.w*ratio, h = dims.h*ratio;
+        doc.addImage(sigVal, 'PNG', MARGIN + (boxW-w)/2, y + (boxH-h)/2, w, h, undefined, 'FAST');
+      } catch(e){}
+    } else {
+      doc.setFont('helvetica','italic');
+      doc.setFontSize(9);
+      doc.setTextColor(COL_MUTED[0],COL_MUTED[1],COL_MUTED[2]);
+      doc.text('— keine Unterschrift erfasst —', MARGIN+4, y+boxH/2+1.5);
+    }
+    y += boxH + 5;
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(COL_MUTED[0],COL_MUTED[1],COL_MUTED[2]);
+    doc.text('Datum: ' + (state.values[dateId] || '—'), MARGIN, y);
+    y += 10;
+  }
+
+  signatureBlock('Unterschrift Kunde', 'kunde_unterschrift', 'kunde_datum');
+  signatureBlock('Unterschrift Techniker', 'techniker_unterschrift', 'techniker_datum');
+
   // ---- Fotos: jedes Bild als eigene volle Seite ----
   const allPhotos = [];
   NAMED_PHOTOS.forEach(p=>{
@@ -2107,9 +2274,11 @@ function cacheImageDims(dataUrl){
 async function exportPdf(){
   showToast('PDF wird erzeugt…');
   const allDataUrls = [
+    state.values['kunde_unterschrift'],
+    state.values['techniker_unterschrift'],
     ...NAMED_PHOTOS.map(p=>state.namedPhotos[p.id]).filter(Boolean),
     ...state.gallery.map(g=>g.dataUrl).filter(Boolean)
-  ];
+  ].filter(Boolean);
   await Promise.all(allDataUrls.map(cacheImageDims));
 
   const doc = buildPdf();
@@ -2138,6 +2307,7 @@ function start(){
   window.setBemerkungen = setBemerkungen;
   // im globalen Scope -- deshalb hier auf window binden (aktives Modul „gewinnt“).
   window.addGalleryPhoto = addGalleryPhoto;
+  window.clearSignature = clearSignature;
   window.goToTab = goToTab;
   window.removeGalleryPhoto = removeGalleryPhoto;
   window.removeNamedPhoto = removeNamedPhoto;
@@ -5257,6 +5427,192 @@ return { open };
 
 <script>
 /* ============================================================
+   LAGER NEUBAU — 50 Stellplätze, eigenständiges Sheet
+   Baugleich mit Lagerhaltung Hugo, nur einfache Nummerierung 1–50
+   (keine 1a/2a-Unterteilung).
+   ============================================================ */
+function createNeubauApp(){
+
+// Eigenständiges Sheet/Script (siehe apps-script-neubau.gs). Nach dem
+// Bereitstellen des Web Apps hier die eigene Deployment-URL eintragen.
+const NEUBAU_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbwQZV854OzW9j0QOkroxp_uJSxS6GTUDU4M7khQG_1MZiEZn1YO0PLob9GTTiBoHZLV/exec';
+
+// Stellplätze: einfach 1 bis 50, ohne a-Unterteilung.
+function buildStellplaetze(){
+  const list = [];
+  for(let n=1;n<=50;n++){ list.push(String(n)); }
+  return list;
+}
+const STELLPLAETZE = buildStellplaetze();
+
+let fachData = {};        // Platz -> {text, voll}
+let currentView = 'entries'; // 'entries' | 'overview'
+const saveTimers = {};    // Platz -> Timeout-Id, für verzögertes Speichern beim Tippen
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function showToast(msg){
+  const t = document.getElementById('toast');
+  if(!t) return;
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(()=> t.classList.remove('show'), 2200);
+}
+
+function statusOf(platz){
+  const d = fachData[platz] || {};
+  if(d.voll === 'Ja') return 'voll';
+  if(d.text && d.text.trim()) return 'teil';
+  return 'leer';
+}
+
+function webhookMissing(){
+  return !NEUBAU_WEBHOOK_URL || NEUBAU_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0;
+}
+
+function renderScreen(){
+  document.getElementById('backBtn').style.display = 'inline-block';
+  document.getElementById('bottomBar').style.display = 'none';
+  document.getElementById('headerTitle').innerHTML = 'Lager Neubau<span id="headerSubtitle">Völzke Heizung · Lüftung · Sanitär</span>';
+  document.getElementById('mainContent').innerHTML = `
+    <div class="section">
+      <div class="section-body" style="display:flex;gap:8px;">
+        <button type="button" class="btn-sm ${currentView==='entries'?'pick':''}" onclick="neubauSetView('entries')" style="flex:1;">📋 Einträge</button>
+        <button type="button" class="btn-sm ${currentView==='overview'?'pick':''}" onclick="neubauSetView('overview')" style="flex:1;">🗺️ Übersicht</button>
+      </div>
+    </div>
+    <div id="neubauBody"></div>
+  `;
+  renderBody();
+  window.scrollTo(0,0);
+}
+
+function renderBody(){
+  const body = document.getElementById('neubauBody');
+  if(!body) return;
+  if(webhookMissing()){
+    body.innerHTML = '<div class="section"><div class="section-body"><p class="hint">Google-Sheet-Adresse für Lager Neubau noch nicht eingetragen.</p></div></div>';
+    return;
+  }
+  body.innerHTML = currentView === 'entries' ? renderEntriesView() : renderOverviewView();
+}
+
+function renderEntriesView(){
+  return STELLPLAETZE.map(platz=>{
+    const d = fachData[platz] || {text:'', voll:'Nein'};
+    return `
+    <div class="section" id="neubauplatz_${platz}">
+      <div class="section-header"><h3>Stellplatz ${platz}</h3></div>
+      <div class="section-body">
+        <div class="field">
+          <textarea oninput="neubauSetText('${platz}', this.value)" placeholder="Inhalt...">${escapeHtml(d.text||'')}</textarea>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#33475a;font-weight:600;">
+          <input type="checkbox" ${d.voll==='Ja'?'checked':''} onchange="neubauSetVoll('${platz}', this.checked)">
+          Stellplatz voll
+        </label>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderOverviewView(){
+  // Einfaches Raster, von unten (Platz 1, nahe Eingang) nach oben (Platz 50) gelesen —
+  // gleiche Grundidee wie bei Lagerhaltung Hugo.
+  const reversed = STELLPLAETZE.slice().reverse();
+  const cells = reversed.map(platz=>{
+    const st = statusOf(platz);
+    const cls = st === 'voll' ? 'lh-voll' : st === 'teil' ? 'lh-teil' : 'lh-leer';
+    return `<button type="button" class="lh-cell ${cls}" onclick="neubauJumpTo('${platz}')">${platz}</button>`;
+  }).join('');
+  return `
+    <div class="section">
+      <div class="section-body">
+        <p class="subtitle" style="margin-top:-4px;">Vereinfachte Übersicht, Eingang unten — Platz 1 unten, Platz 50 oben. Grün = leer, orange = teilweise belegt, rot = voll. Zum Bearbeiten antippen.</p>
+        <div class="lh-grid">${cells}</div>
+      </div>
+    </div>
+  `;
+}
+
+function neubauSetView(v){
+  currentView = v;
+  renderScreen();
+}
+
+function neubauJumpTo(platz){
+  currentView = 'entries';
+  renderScreen();
+  setTimeout(()=>{
+    const target = document.getElementById('neubauplatz_'+platz);
+    if(target) target.scrollIntoView({behavior:'smooth', block:'center'});
+  }, 60);
+}
+
+function neubauSetText(platz, val){
+  if(!fachData[platz]) fachData[platz] = {text:'', voll:'Nein'};
+  fachData[platz].text = val;
+  scheduleSave(platz, false);
+}
+
+function neubauSetVoll(platz, checked){
+  if(!fachData[platz]) fachData[platz] = {text:'', voll:'Nein'};
+  fachData[platz].voll = checked ? 'Ja' : 'Nein';
+  scheduleSave(platz, true); // Haken sofort speichern, nicht auf Tipp-Pause warten
+}
+
+function scheduleSave(platz, immediate){
+  if(saveTimers[platz]) clearTimeout(saveTimers[platz]);
+  saveTimers[platz] = setTimeout(()=> savePlatz(platz), immediate ? 0 : 900);
+}
+
+function savePlatz(platz){
+  if(webhookMissing()) return;
+  const d = fachData[platz] || {text:'', voll:'Nein'};
+  fetch(NEUBAU_WEBHOOK_URL, {
+    method:'POST',
+    mode:'no-cors',
+    headers:{ 'Content-Type':'text/plain' },
+    body: JSON.stringify({ action:'update', fach: platz, text: d.text||'', voll: d.voll||'Nein' }),
+  }).catch(()=>{});
+}
+
+async function loadStellplaetze(){
+  if(webhookMissing()) return;
+  try{
+    const res = await fetch(NEUBAU_WEBHOOK_URL);
+    const rows = await res.json();
+    if(Array.isArray(rows)){
+      rows.forEach(r=>{
+        fachData[r.fach] = { text: r.text || '', voll: r.voll === 'Ja' ? 'Ja' : 'Nein' };
+      });
+    }
+    renderBody();
+  } catch(err){
+    showToast('Lagerdaten konnten nicht geladen werden — kein Internet?');
+  }
+}
+
+function open(){
+  window.neubauSetView = neubauSetView;
+  window.neubauSetText = neubauSetText;
+  window.neubauSetVoll = neubauSetVoll;
+  window.neubauJumpTo = neubauJumpTo;
+  currentView = 'entries';
+  renderScreen();
+  loadStellplaetze();
+}
+
+return { open };
+}
+
+</script>
+
+<script>
+/* ============================================================
    SHELL — Navigation zwischen Kategorien, Listen und Werkzeugen
    ============================================================ */
 
@@ -5284,7 +5640,7 @@ const TOOL_CATALOG = {
     items: [
       { key:'rote_halle', icon:'🔴', title:'Rote Halle', desc:'Lagerkontrolle & Protokoll' },
       { key:'hugo',        icon:'🏬', title:'Hugo',        desc:'Lagerhaltung erfassen & Übersicht' },
-      { key:'neubau',       icon:'🏗️', title:'Neubau',      desc:'Demnächst verfügbar' },
+      { key:'neubau',       icon:'🏗️', title:'Neubau',      desc:'Stellplätze erfassen & Übersicht' },
       { key:'bestellungen', icon:'📝', title:'Lagerbestellungen', desc:'Benötigtes Material erfassen & Bestellstatus abhaken' },
     ]
   }
@@ -5295,6 +5651,7 @@ let shellFroelingApp = null;
 let shellRemehaApp = null;
 let shellChecklistenApp = null;
 let shellLagerHugoApp = null;
+let shellNeubauApp = null;
 
 // Jeder Screen setzt currentBack auf die Funktion, die beim Antippen von
 // "Zurück" aufgerufen werden soll — so muss goBack() nicht wissen, aus
@@ -5309,6 +5666,7 @@ function initApps(){
   shellRemehaApp = createRemehaApp();
   shellChecklistenApp = createChecklistenApp();
   shellLagerHugoApp = createLagerHugoApp();
+  shellNeubauApp = createNeubauApp();
 
   // Checklisten-Kacheln aus dem Modul selbst befüllen (Icon/Titel/Beschreibung bleiben dort gepflegt).
   // Die Lagerkontrolle liegt jetzt unter Lager → Rote Halle und wird hier aus der Liste ausgeblendet.
@@ -5387,7 +5745,7 @@ function showCategoryList(catKey){
 function openLagerTool(key){
   if(key === 'hugo') openLagerHugo();
   else if(key === 'rote_halle') showRoteHalleList();
-  else if(key === 'neubau') showNeubauPlaceholder();
+  else if(key === 'neubau') openNeubau();
   else if(key === 'bestellungen') openBestellungen();
 }
 
@@ -5422,17 +5780,16 @@ function showRoteHalleList(){
   });
 }
 
-function showNeubauPlaceholder(){
-  currentBack = () => showCategoryList('lager');
-  el('headerTitle').innerHTML = 'Neubau<span id="headerSubtitle">Völzke Heizung · Lüftung · Sanitär</span>';
-  setChrome({ tabNav:false, bottomBar:false, prevNext:false, statusPill:false, back:true });
-  el('mainContent').innerHTML = `<p class="home-intro">Für den Neubau ist noch nichts hinterlegt — demnächst verfügbar.</p>`;
-}
-
 function openLagerHugo(){
   currentBack = () => showCategoryList('lager');
   setChrome({ tabNav:false, bottomBar:false, prevNext:false, statusPill:false, back:true });
   shellLagerHugoApp.open();
+}
+
+function openNeubau(){
+  currentBack = () => showCategoryList('lager');
+  setChrome({ tabNav:false, bottomBar:false, prevNext:false, statusPill:false, back:true });
+  shellNeubauApp.open();
 }
 
 function openBestellungen(){
