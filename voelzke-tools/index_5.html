@@ -966,6 +966,46 @@
 .lh-cell.lh-leer{background:#1f9e5a;}
 .lh-cell.lh-teil{background:#e0872a;}
 .lh-cell.lh-voll{background:#d64545;}
+
+/* ---- V-Control: Select-Feld (Anlagentyp, Quelle Vorjahreswert) + Zeitfeld (Heizzeiten) ---- */
+select{
+  width:100%;
+  border:1.5px solid var(--line);
+  border-radius:9px;
+  padding:10px 11px;
+  font-size:14.5px;
+  font-family:inherit;
+  background:#fff;
+  color:var(--text);
+  appearance:none;
+  -webkit-appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%2348586b'><path d='M5.5 7.5l4.5 5 4.5-5z'/></svg>");
+  background-repeat:no-repeat;
+  background-position:right 11px center;
+  background-size:16px;
+}
+select:focus{outline:none;border-color:var(--blue-mid);}
+input[type=time]{
+  width:100%;
+  border:1.5px solid var(--line);
+  border-radius:9px;
+  padding:10px 11px;
+  font-size:14.5px;
+  font-family:inherit;
+  background:#fff;
+  color:var(--text);
+}
+input[type=time]:focus{outline:none;border-color:var(--blue-mid);}
+
+/* ---- V-Control: Datenschutzerklärung — reiner Lesetext ---- */
+.legal-text h4{font-size:13.5px;color:#0b2e5c;margin:16px 0 6px;}
+.legal-text p{font-size:13px;line-height:1.55;color:#33475a;margin:0 0 8px;}
+.legal-text ul{margin:0 0 8px;padding-left:18px;}
+.legal-text li{font-size:13px;line-height:1.5;color:#33475a;margin-bottom:4px;}
+.legal-placeholder{
+  background:#fff6e0;border:1.5px dashed #e0872a;border-radius:9px;
+  padding:12px;font-size:12.5px;color:#8a5a12;line-height:1.5;margin-bottom:14px;
+}
 </style>
 </head>
 <body>
@@ -4282,6 +4322,7 @@ function text(id,label,hint){ return {type:'text', id, label, hint}; }
 function area(id,label,hint){ return {type:'textarea', id, label, hint}; }
 function dat(id,label){ return {type:'date', id, label}; }
 function zeit(id,label){ return {type:'time', id, label}; }
+function sel(id,label,options,hint){ return {type:'select', id, label, options, hint}; }
 
 /* ============================================================
    GOOGLE SHEET PROTOKOLL (nur für die Lagerkontrolle)
@@ -4579,6 +4620,50 @@ const CHECKLISTS = {
     signature: { id:'lg_unterschrift', label:'Unterschrift Kontrolleur' },
   },
 
+  vcontrol_ibn: {
+    icon:'🎛️',
+    title:'V-Control IBN-Datenblatt',
+    desc:'Inbetriebnahme der smarten Heizungsregelung erfassen',
+    pdfTitle:'V-Control IBN-Datenblatt',
+    sections:[
+      { id:'kunde', title:'Kunde', fields:[
+        text('vc_kundenname','Kundenname'),
+        text('vc_ort_plz','Ort + PLZ'),
+        text('vc_strasse','Straße + Hausnr.'),
+        dat('vc_datum','Datum'),
+        text('vc_techniker','Name Techniker'),
+      ]},
+      { id:'anlagendaten', title:'Anlagendaten', fields:[
+        sel('vc_anlagentyp','Anlagentyp',['Wärmepumpe Novelan','Wärmepumpe (anderer Hersteller)','Gas Brennwertkessel Remeha','Sonstige']),
+        text('vc_hk_steilheit','Heizkurven Steilheit','Ausgangswert notieren!'),
+        text('vc_hk_niveau','Heizkurven Niveau','Ausgangswert notieren!'),
+        text('vc_ip_waermepumpe','IP-Adresse der Wärmepumpe'),
+        text('vc_betriebsstunden','Betriebsstunden aktuell'),
+        text('vc_starts','Starts aktuell'),
+        text('vc_laufzeit','Durchschnittliche Laufzeit aktuell'),
+        text('vc_vorjahresverbrauch','Vorjahresverbrauch (kWh)'),
+        dat('vc_ablesedatum','Ablesedatum Vorjahr'),
+        sel('vc_quelle_vorjahreswert','Quelle des Vorjahreswerts',['Gasrechnung / Ölrechnung','Wärmemengenzähler','Schätzung Kunde','Nicht verfügbar']),
+      ]},
+      { id:'kundengewohnheiten', title:'Kundengewohnheiten', fields:[
+        zeit('vc_heizzeit_von','Heizzeiten von'),
+        zeit('vc_heizzeit_bis','Heizzeiten bis'),
+      ]},
+      { id:'abschluss', title:'Abschluss-Checkliste', fields:[
+        chip('vc_lan_led','LAN und Netz an V-Box angeschlossen — weiße LED leuchtet dauerhaft'),
+        chip('vc_access_point','Access Point angeschlossen und mit Kunden eingerichtet'),
+        chip('vc_thermostate_angelernt','Thermostate mit Kunden angelernt und in die Bedienung eingewiesen'),
+        chip('vc_raumnamen_hinweis','Kunde darauf hingewiesen, dass die Heizkörperthermostate nach den Räumen benannt werden sollen','Nicht nur "Heizkörperthermostat"'),
+        chip('vc_datenschutz_unterschrieben','Datenschutzhinweise unterschreiben lassen'),
+        chip('vc_fragen_geklaert','Kunden nach weiteren Fragen gefragt und geklärt'),
+      ]},
+      { id:'bemerkungen', title:'Sonstige Bemerkungen', fields:[
+        area('vc_bemerkungen','Bemerkungen'),
+      ]},
+    ],
+    signature: { id:'vc_unterschrift', label:'Techniker / Unterschrift' },
+  },
+
 };
 
 const HOME_ORDER = ['azubi','material','montage','ausstattung','werkzeugbus','werkzeugkiste','lager'];
@@ -4616,6 +4701,10 @@ function renderField(f){
   let inner = '';
   if(f.type === 'textarea'){
     inner = `<textarea oninput="setValue('${f.id}',this.value)">${escapeHtml(val)}</textarea>`;
+  } else if(f.type === 'select'){
+    const opts = ['<option value="" ' + (!val?'selected':'') + '>Bitte wählen…</option>']
+      .concat(f.options.map(o=>`<option value="${escapeHtml(o)}" ${val===o?'selected':''}>${escapeHtml(o)}</option>`));
+    inner = `<select onchange="setValue('${f.id}',this.value)">${opts.join('')}</select>`;
   } else {
     inner = `<input type="${f.type}" value="${escapeHtml(val)}" oninput="setValue('${f.id}',this.value)">`;
   }
@@ -5216,7 +5305,7 @@ async function exportPdf(){
 
   const doc = buildPdf(currentChecklist);
   const datum = (state.values['az_kw'] || state.values['mat_datum'] || state.values['mo_datum'] || state.values['au_datum'] ||
-                 state.values['wb_datum'] || state.values['wk_datum'] || new Date().toISOString().slice(0,10));
+                 state.values['wb_datum'] || state.values['wk_datum'] || state.values['vc_datum'] || new Date().toISOString().slice(0,10));
   const safeDatum = String(datum).replace(/[^a-z0-9äöüß.]+/gi,'_');
   const filename = `${cl.pdfTitle.replace(/\s+/g,'_')}_${safeDatum}.pdf`;
 
@@ -5234,7 +5323,300 @@ async function exportPdf(){
 
 }
 
-return { openChecklist, openLog, openBestellungen, CHECKLISTS, HOME_ORDER };
+/* ============================================================
+   V-CONTROL — DATENSCHUTZERKLÄRUNG (Briefbogen-Dokument, keine Checkliste)
+   Text 1:1 aus "Datenschutz_mit_Briefbogen.pdf". Eigenständige Mini-App,
+   nutzt aber das gemeinsame state.values / initSignaturePad / clearSignature
+   des Checklisten-Moduls, damit die Unterschrift wie gewohnt funktioniert.
+   ============================================================ */
+const VC_DS_SIG_ID = 'vc_ds_unterschrift';
+const VC_DS_ORT_DATUM_ID = 'vc_ds_ort_datum';
+
+const VC_DATENSCHUTZ_SECTIONS = [
+  { num:'1', title:'Verantwortlicher', body:
+    'Völzke Heizung Sanitär<br>Niclas Völzke, Rosenstraße 24, 56370 Rettert<br>Tel.: 06486 902659 | E-Mail: buero@rvhs.de' },
+  { num:'2', title:'Welche Daten werden erfasst?', body:
+    '<strong>Raumklimatische Daten (Homematic IP Thermostate)</strong><ul>'+
+    '<li>Raumtemperatur und Solltemperatur je Raum</li>'+
+    '<li>Ventilstellung je Thermostat (0–100&nbsp;%)</li>'+
+    '<li>Temperaturdifferenz Soll/Ist je Raum</li></ul>'+
+    '<strong>Heizungsanlagendaten (Wärmepumpe / Luxtronik)</strong><ul>'+
+    '<li>Alle Daten der Wärmepumpe, die dem Optimieren der Heizungsanlage dienen</li></ul>'+
+    '<strong>Fernzugriff (Tailscale VPN)</strong><ul>'+
+    '<li>Zeitstempel von Verbindungsaufbau und -abbau durch Völzke-Mitarbeiter</li>'+
+    '<li>Keine Raumdaten werden automatisch an Völzke-Server übertragen</li>'+
+    '<li>Zugriff nur durch autorisierte Völzke-Mitarbeiter, verschlüsselt über VPN</li></ul>' },
+  { num:'3', title:'Zweck der Datenverarbeitung', body:
+    '<ul><li>Automatische Optimierung der Vorlauftemperatur Ihrer Heizungsanlage</li>'+
+    '<li>Erkennung von Betriebsstörungen</li>'+
+    '<li>Fernwartung und Anpassung der Optimierungsparameter</li></ul>' },
+  { num:'4', title:'Speicherung und Weitergabe', highlight:
+    'Alle Daten werden lokal auf dem Home Assistant Gerät in Ihrem Gebäude gespeichert.<br>'+
+    'Eine Weitergabe an Dritte findet nicht statt.<br>'+
+    'Das Gerät bleibt dauerhaft in Ihrem Eigentum.', body:
+    '<ul><li>Speicherdauer: unbegrenzt, Löschung jederzeit auf Wunsch möglich</li>'+
+    '<li>Keine Weitergabe an Drittanbieter oder Werbepartner</li></ul>' },
+  { num:'5', title:'Ihre Rechte (DSGVO)', body:
+    '<ul><li>Auskunft, Berichtigung, Löschung Ihrer Daten (Art. 15–17 DSGVO)</li>'+
+    '<li>Einschränkung der Verarbeitung und Widerspruchsrecht (Art. 18, 21 DSGVO)</li></ul>'+
+    'Anfragen an: buero@rvhs.de' },
+  { num:'6', title:'Einwilligung', body:
+    'Mit Ihrer Unterschrift stimmen Sie der beschriebenen Datenverarbeitung zu. '+
+    'Die Einwilligung kann jederzeit widerrufen werden — der Fernzugriff wird dann deaktiviert.' },
+];
+
+function renderVcDatenschutzScreen(){
+  const sectionsHtml = VC_DATENSCHUTZ_SECTIONS.map(s=>{
+    const highlightHtml = s.highlight ? `<div class="legal-placeholder" style="background:#eef4fb;border-color:#9fc3e6;color:#0b2e5c;">${s.highlight}</div>` : '';
+    return `<h4>${s.num}&nbsp; ${s.title}</h4>${highlightHtml}<p>${s.body}</p>`;
+  }).join('');
+
+  const ortDatumVal = state.values[VC_DS_ORT_DATUM_ID] || '';
+
+  return `
+    <div class="section">
+      <div class="section-body legal-text">
+        <h4 style="margin-top:0;">Völzke Heizung Sanitär — Datenschutzhinweis</h4>
+        <p class="hint" style="margin:-4px 0 10px;">VölzControl Heizungsoptimierung</p>
+        <div class="legal-placeholder">
+          Sehr geehrte Kundin, sehr geehrter Kunde, im Rahmen des VölzControl-Dienstleistungsvertrags
+          installieren wir eine lokale Steuereinheit in Ihrem Gebäude, die Ihre Heizungsanlage automatisch
+          optimiert. Nachfolgend informieren wir Sie darüber, welche Daten dabei erfasst und genutzt werden.
+        </div>
+        ${sectionsHtml}
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-header"><h3>Einwilligung Kunde</h3></div>
+      <div class="section-body">
+        <div class="field">
+          <label>Ort, Datum</label>
+          <input type="text" id="vcDsOrtDatum" value="${escapeHtml(ortDatumVal)}" placeholder="z.B. Rettert, ${new Date().toLocaleDateString('de-DE')}" oninput="setValue('${VC_DS_ORT_DATUM_ID}',this.value)">
+        </div>
+        <div class="field">
+          <label>Unterschrift Kunde</label>
+          <div class="sig-wrap">
+            <canvas id="sigcanvas_${VC_DS_SIG_ID}"></canvas>
+            <div class="sig-toolbar"><span>mit Finger/Stift unterschreiben</span><button type="button" class="sig-clear" onclick="clearSignature('${VC_DS_SIG_ID}')">Löschen</button></div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function openVcDatenschutz(){
+  window.clearSignature = clearSignature;
+  window.setValue = setValue;
+  document.getElementById('mainContent').innerHTML = renderVcDatenschutzScreen();
+  window.scrollTo(0,0);
+  initSignaturePad(VC_DS_SIG_ID);
+  const btnPdf = document.getElementById('btnPdf');
+  if(btnPdf) btnPdf.onclick = exportVcDatenschutzPdf;
+}
+
+function buildVcDatenschutzPdf(){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:'mm', format:'a4' });
+  let y = MARGIN;
+
+  function newPage(){ doc.addPage(); y = MARGIN; drawLetterheadFooter(); }
+  function ensure(space){ if(y + space > PAGE_H - 20){ newPage(); } }
+
+  function drawLetterheadFooter(){
+    doc.setDrawColor(COL_LINE[0],COL_LINE[1],COL_LINE[2]);
+    doc.setLineWidth(0.3);
+    doc.line(MARGIN, PAGE_H-20, PAGE_W-MARGIN, PAGE_H-20);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(COL_BLUE[0],COL_BLUE[1],COL_BLUE[2]);
+    doc.text('INHABER: Niclas Völzke', MARGIN, PAGE_H-15);
+    doc.text('TEL (0) 6486 90 26 59', MARGIN+65, PAGE_H-15);
+    doc.text('STEUER-NR.: 14-1806050-9', MARGIN+130, PAGE_H-15);
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(7);
+    doc.setTextColor(COL_MUTED[0],COL_MUTED[1],COL_MUTED[2]);
+    doc.text('Rosenstraße 24 · 56370 Rettert', MARGIN, PAGE_H-11.5);
+    doc.text('FAX (0) 6486 90 26 63', MARGIN+65, PAGE_H-11.5);
+    doc.text('STEUER-ID: DE212542173', MARGIN+130, PAGE_H-11.5);
+    doc.text('MAIL info@rvhs.de', MARGIN+65, PAGE_H-8);
+    doc.text('WEB rvhs.de', MARGIN+65, PAGE_H-4.5);
+    doc.setFontSize(6.5);
+    doc.setTextColor(COL_LINE[0]+30,COL_LINE[1]+30,COL_LINE[2]+30);
+    doc.text('Völzke Heizung Sanitär — Datenschutzhinweis VölzControl v1.0 — ' + new Date().toLocaleDateString('de-DE'), PAGE_W/2, PAGE_H-2.5, {align:'center'});
+  }
+
+  function letterheadHeader(){
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(9);
+    doc.setTextColor(COL_TEXT[0],COL_TEXT[1],COL_TEXT[2]);
+    doc.text('VÖLZKE', MARGIN, 14);
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(9);
+    doc.text('· Rosenstraße 31 · 56370 Rettert', MARGIN+13, 14);
+    const logoW = 32, logoH = logoW*(690/981);
+    try{ doc.addImage(LOGO_FULL_DATAURL, 'PNG', PAGE_W-MARGIN-logoW, 6, logoW, logoH, undefined, 'FAST'); }catch(e){}
+    doc.setDrawColor(COL_LINE[0],COL_LINE[1],COL_LINE[2]);
+    doc.setLineWidth(0.3);
+    doc.line(MARGIN, 22, PAGE_W-MARGIN, 22);
+    y = 32;
+
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(15);
+    doc.setTextColor(COL_BLUE[0],COL_BLUE[1],COL_BLUE[2]);
+    doc.text('Datenschutzhinweis', MARGIN, y);
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(COL_MUTED[0],COL_MUTED[1],COL_MUTED[2]);
+    doc.text('VölzControl Heizungsoptimierung', MARGIN, y+6);
+    y += 13;
+
+    doc.setFillColor(COL_LIGHT[0],COL_LIGHT[1],COL_LIGHT[2]);
+    doc.setDrawColor(COL_LINE[0],COL_LINE[1],COL_LINE[2]);
+    const introLines = doc.splitTextToSize(
+      'Sehr geehrte Kundin, sehr geehrter Kunde, im Rahmen des VölzControl-Dienstleistungsvertrags '+
+      'installieren wir eine lokale Steuereinheit in Ihrem Gebäude, die Ihre Heizungsanlage automatisch '+
+      'optimiert. Nachfolgend informieren wir Sie darüber, welche Daten dabei erfasst und genutzt werden.',
+      PAGE_W-2*MARGIN-8);
+    const boxH = introLines.length*4.6 + 8;
+    doc.roundedRect(MARGIN, y, PAGE_W-2*MARGIN, boxH, 1.5, 1.5, 'FD');
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(9);
+    doc.setTextColor(COL_TEXT[0],COL_TEXT[1],COL_TEXT[2]);
+    doc.text(introLines, MARGIN+4, y+6);
+    y += boxH + 8;
+  }
+
+  function sectionHeading(num, title){
+    ensure(12);
+    doc.setFillColor(COL_LIGHT[0],COL_LIGHT[1],COL_LIGHT[2]);
+    doc.rect(MARGIN, y, PAGE_W-2*MARGIN, 7.5, 'F');
+    doc.setFillColor(COL_BLUE[0],COL_BLUE[1],COL_BLUE[2]);
+    doc.rect(MARGIN, y, 1.4, 7.5, 'F');
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(10.5);
+    doc.setTextColor(COL_BLUE[0],COL_BLUE[1],COL_BLUE[2]);
+    doc.text(num + '  ' + title, MARGIN+4, y+5.3);
+    y += 11;
+  }
+
+  function paragraph(text, indent){
+    ensure(8);
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(9);
+    doc.setTextColor(COL_TEXT[0],COL_TEXT[1],COL_TEXT[2]);
+    const lines = doc.splitTextToSize(text, PAGE_W-2*MARGIN-(indent||0));
+    lines.forEach(line=>{
+      ensure(5);
+      doc.text(line, MARGIN+(indent||0), y);
+      y += 4.6;
+    });
+    y += 2;
+  }
+
+  function bullet(text){ paragraph('•  ' + text, 3); }
+
+  function highlightBox(lines){
+    ensure(lines.length*4.6 + 8);
+    const boxH = lines.length*4.6 + 6;
+    doc.setFillColor(238,244,251);
+    doc.setDrawColor(159,195,230);
+    doc.roundedRect(MARGIN, y, PAGE_W-2*MARGIN, boxH, 1.5, 1.5, 'FD');
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(9);
+    doc.setTextColor(11,46,92);
+    lines.forEach((l,i)=>{ doc.text(l, MARGIN+4, y+5.5+i*4.6); });
+    y += boxH + 6;
+  }
+
+  letterheadHeader();
+
+  sectionHeading('1', 'Verantwortlicher');
+  paragraph('Völzke Heizung Sanitär');
+  paragraph('Niclas Völzke, Rosenstraße 24, 56370 Rettert');
+  paragraph('Tel.: 06486 902659 | E-Mail: buero@rvhs.de');
+
+  sectionHeading('2', 'Welche Daten werden erfasst?');
+  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(COL_TEXT[0],COL_TEXT[1],COL_TEXT[2]);
+  ensure(6); doc.text('Raumklimatische Daten (Homematic IP Thermostate)', MARGIN, y); y += 5.2;
+  bullet('Raumtemperatur und Solltemperatur je Raum');
+  bullet('Ventilstellung je Thermostat (0–100 %)');
+  bullet('Temperaturdifferenz Soll/Ist je Raum');
+  doc.setFont('helvetica','bold'); ensure(6); doc.text('Heizungsanlagendaten (Wärmepumpe / Luxtronik)', MARGIN, y); y += 5.2;
+  bullet('Alle Daten der Wärmepumpe, die dem Optimieren der Heizungsanlage dienen');
+  doc.setFont('helvetica','bold'); ensure(6); doc.text('Fernzugriff (Tailscale VPN)', MARGIN, y); y += 5.2;
+  bullet('Zeitstempel von Verbindungsaufbau und -abbau durch Völzke-Mitarbeiter');
+  bullet('Keine Raumdaten werden automatisch an Völzke-Server übertragen');
+  bullet('Zugriff nur durch autorisierte Völzke-Mitarbeiter, verschlüsselt über VPN');
+
+  sectionHeading('3', 'Zweck der Datenverarbeitung');
+  bullet('Automatische Optimierung der Vorlauftemperatur Ihrer Heizungsanlage');
+  bullet('Erkennung von Betriebsstörungen');
+  bullet('Fernwartung und Anpassung der Optimierungsparameter');
+
+  sectionHeading('4', 'Speicherung und Weitergabe');
+  highlightBox([
+    'Alle Daten werden lokal auf dem Home Assistant Gerät in Ihrem Gebäude gespeichert.',
+    'Eine Weitergabe an Dritte findet nicht statt.',
+    'Das Gerät bleibt dauerhaft in Ihrem Eigentum.',
+  ]);
+  bullet('Speicherdauer: unbegrenzt, Löschung jederzeit auf Wunsch möglich');
+  bullet('Keine Weitergabe an Drittanbieter oder Werbepartner');
+
+  sectionHeading('5', 'Ihre Rechte (DSGVO)');
+  bullet('Auskunft, Berichtigung, Löschung Ihrer Daten (Art. 15–17 DSGVO)');
+  bullet('Einschränkung der Verarbeitung und Widerspruchsrecht (Art. 18, 21 DSGVO)');
+  paragraph('Anfragen an: buero@rvhs.de');
+
+  sectionHeading('6', 'Einwilligung');
+  paragraph('Mit Ihrer Unterschrift stimmen Sie der beschriebenen Datenverarbeitung zu. Die Einwilligung kann jederzeit widerrufen werden — der Fernzugriff wird dann deaktiviert.');
+
+  // ---- Ort/Datum + Unterschrift Kunde ----
+  ensure(40);
+  y += 4;
+  const ortDatum = state.values[VC_DS_ORT_DATUM_ID] || '';
+  const colW = (PAGE_W-2*MARGIN-10)/2;
+  doc.setDrawColor(COL_LINE[0],COL_LINE[1],COL_LINE[2]);
+  doc.setLineWidth(0.3);
+  doc.line(MARGIN, y+22, MARGIN+colW, y+22);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(COL_TEXT[0],COL_TEXT[1],COL_TEXT[2]);
+  doc.text(ortDatum || '—', MARGIN, y+20);
+  doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(COL_MUTED[0],COL_MUTED[1],COL_MUTED[2]);
+  doc.text('Ort, Datum', MARGIN, y+27);
+
+  const sigX = MARGIN+colW+10, sigW = colW;
+  const sigVal = state.values[VC_DS_SIG_ID];
+  if(sigVal){
+    try{
+      const dims = getImageDimensions(sigVal);
+      const ratio = Math.min(sigW/dims.w, 20/dims.h);
+      const w = dims.w*ratio, h = dims.h*ratio;
+      doc.addImage(sigVal, 'PNG', sigX + (sigW-w)/2, y+22-h, w, h, undefined, 'FAST');
+    } catch(e){}
+  }
+  doc.line(sigX, y+22, sigX+sigW, y+22);
+  doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(COL_MUTED[0],COL_MUTED[1],COL_MUTED[2]);
+  doc.text('Unterschrift Kunde', sigX, y+27);
+
+  drawLetterheadFooter();
+  return doc;
+}
+
+async function exportVcDatenschutzPdf(){
+  showToast('PDF wird erzeugt…');
+  const sigVal = state.values[VC_DS_SIG_ID];
+  if(sigVal) await cacheImageDims(sigVal);
+  const doc = buildVcDatenschutzPdf();
+  const filename = 'Datenschutzhinweis_VoelzControl_' + new Date().toISOString().slice(0,10) + '.pdf';
+  const blob = doc.output('blob');
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+  showToast('PDF gespeichert: ' + filename);
+}
+
+return { openChecklist, openLog, openBestellungen, openVcDatenschutz, CHECKLISTS, HOME_ORDER };
 }
 
 </script>
@@ -5620,11 +6002,12 @@ const TOOL_CATALOG = {
   ibn: {
     icon: '🔥',
     title: 'IBN-Protokolle',
-    desc: 'Inbetriebnahme-Protokolle für Wärmeerzeuger',
+    desc: 'Inbetriebnahme-Protokolle für Wärmeerzeuger & Regelungssysteme',
     items: [
       { key:'novelan',  icon:'🌡️', title:'Novelan',  desc:'Wärmepumpen-Inbetriebnahme' },
       { key:'froeling', icon:'🔥', title:'Fröling',  desc:'Pellet-/Holzkessel-Inbetriebnahme' },
       { key:'remeha',   icon:'💧', title:'Remeha',   desc:'Gas-/Öl-Kessel-Inbetriebnahme' },
+      { key:'vcontrol', icon:'🎛️', title:'V-Control', desc:'Datenblatt & Datenschutzerklärung' },
     ]
   },
   checklisten: {
@@ -5799,12 +6182,51 @@ function openBestellungen(){
 }
 
 function openIbnTool(key){
+  if(key === 'vcontrol'){ showVControlList(); return; }
   currentBack = () => showCategoryList('ibn');
   setChrome({ tabNav:true, bottomBar:true, prevNext:true, statusPill:true, back:true });
   el('mainContent').innerHTML = '';
   if(key === 'novelan'){ el('headerTitle').innerHTML = 'IBN-Protokoll Novelan<span id="headerSubtitle">Völzke Heizung · Lüftung · Sanitär</span>'; shellNovelanApp.start(); }
   else if(key === 'froeling'){ el('headerTitle').innerHTML = 'IBN-Protokoll Fröling<span id="headerSubtitle">Völzke Heizung · Lüftung · Sanitär</span>'; shellFroelingApp.start(); }
   else if(key === 'remeha'){ el('headerTitle').innerHTML = 'IBN-Protokoll Remeha<span id="headerSubtitle">Völzke Heizung · Lüftung · Sanitär</span>'; shellRemehaApp.start(); }
+}
+
+/* ---- V-Control: Unterliste (Datenblatt + Datenschutzerklärung) ---- */
+function showVControlList(){
+  currentBack = () => showCategoryList('ibn');
+  el('headerTitle').innerHTML = 'V-Control<span id="headerSubtitle">Völzke Heizung · Lüftung · Sanitär</span>';
+  setChrome({ tabNav:false, bottomBar:false, prevNext:false, statusPill:false, back:true });
+  el('mainContent').innerHTML = `<p class="home-intro">Smarte Heizungsregelung — Inbetriebnahme.</p>`;
+  const wrap = document.createElement('div');
+  wrap.className = 'card-grid';
+  wrap.innerHTML = `
+    <button class="cl-card" data-key="datenblatt">
+      <div class="cl-icon">📋</div>
+      <h3>IBN-Datenblatt</h3>
+      <p>Kunde, Anlagendaten & Abschluss-Checkliste erfassen</p>
+    </button>
+    <button class="cl-card" data-key="datenschutz">
+      <div class="cl-icon">🔒</div>
+      <h3>Datenschutzerklärung</h3>
+      <p>Zum Anzeigen und vom Kunden unterschreiben lassen</p>
+    </button>`;
+  el('mainContent').appendChild(wrap);
+  wrap.querySelector('[data-key="datenblatt"]').addEventListener('click', ()=>{
+    currentBack = showVControlList;
+    setChrome({ tabNav:false, bottomBar:true, prevNext:false, statusPill:false, back:true });
+    shellChecklistenApp.openChecklist('vcontrol_ibn');
+  });
+  wrap.querySelector('[data-key="datenschutz"]').addEventListener('click', ()=>{
+    openVControlDatenschutz();
+  });
+}
+
+function openVControlDatenschutz(){
+  currentBack = showVControlList;
+  el('headerTitle').innerHTML = 'Datenschutzhinweis V-Control<span id="headerSubtitle">Völzke Heizung · Lüftung · Sanitär</span>';
+  setChrome({ tabNav:false, bottomBar:true, prevNext:false, statusPill:false, back:true });
+  el('btnLog').style.display = 'none';
+  shellChecklistenApp.openVcDatenschutz();
 }
 
 function openChecklistTool(key){
