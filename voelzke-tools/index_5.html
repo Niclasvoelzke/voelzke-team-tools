@@ -1006,6 +1006,26 @@ input[type=time]:focus{outline:none;border-color:var(--blue-mid);}
   background:#fff6e0;border:1.5px dashed #e0872a;border-radius:9px;
   padding:12px;font-size:12.5px;color:#8a5a12;line-height:1.5;margin-bottom:14px;
 }
+
+/* ---- Mitarbeiter-Login per PIN ---- */
+.login-screen{max-width:320px;margin:10px auto 0;text-align:center;}
+.pin-dots{display:flex;justify-content:center;gap:14px;margin:22px 0 10px;}
+.pin-dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--blue-mid);background:transparent;transition:background .15s;}
+.pin-dot.filled{background:var(--blue-mid);}
+.login-error{min-height:18px;font-size:12.5px;color:var(--bad);margin:0 0 14px;}
+.pin-keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:260px;margin:0 auto;}
+.pin-btn{
+  padding:16px 0;font-size:20px;font-weight:700;color:var(--blue-dark);
+  background:var(--card);border:1.5px solid var(--line);border-radius:var(--radius);
+}
+.pin-btn:active{background:#e3edf7;}
+.pin-btn-empty{visibility:hidden;border:none;background:none;}
+.pin-btn-del{font-size:18px;color:var(--bad);}
+.user-badge{display:none;align-items:center;gap:6px;font-size:11.5px;color:#fff;opacity:.92;margin-right:2px;}
+.user-badge button{
+  background:rgba(255,255,255,.15);border:none;color:#fff;border-radius:99px;
+  width:22px;height:22px;line-height:1;font-size:13px;cursor:pointer;flex:none;
+}
 </style>
 </head>
 <body>
@@ -1019,6 +1039,10 @@ input[type=time]:focus{outline:none;border-color:var(--blue-mid);}
       </h1>
     </div>
     <div class="status-pill" id="statusPill" style="display:none;">●</div>
+    <div class="user-badge" id="userBadge">
+      <span id="userBadgeName"></span>
+      <button type="button" id="logoutBtn" title="Abmelden">⎋</button>
+    </div>
     <button class="back-btn" id="backBtn" style="display:none;">← Zurück</button>
   </div>
 </header>
@@ -4842,6 +4866,7 @@ async function submitBestellung(){
     id: bestellungUuid(),
     text,
     erstellt: new Date().toISOString(),
+    mitarbeiter: currentUser ? currentUser.name : '',
   };
   showToast('Speichere Eintrag…');
   try{
@@ -4913,7 +4938,7 @@ async function loadBestellungen(){
       return `<div class="gallery-item" style="align-items:flex-start;">
         <div style="flex:1;">
           <div style="font-weight:700;color:var(--blue-dark);${bestellt?'text-decoration:line-through;opacity:.6;':''}">${escapeHtml(r.text || '(kein Text übermittelt)')}</div>
-          <div class="hint">${escapeHtml(datumStr || 'kein Zeitstempel übermittelt')}</div>
+          <div class="hint">${escapeHtml(datumStr || 'kein Zeitstempel übermittelt')}${r.mitarbeiter ? ' · ' + escapeHtml(r.mitarbeiter) : ''}</div>
         </div>
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#33475a;flex:none;">
           <input type="checkbox" ${bestellt?'checked':''} onchange="toggleBestellung('${r.id}', this.checked); this.closest('.gallery-item').style.opacity='.6';">
@@ -6043,6 +6068,154 @@ let currentBack = null;
 
 function el(id){ return document.getElementById(id); }
 
+/* ---- Mitarbeiter-Login per PIN ----
+   Mitarbeiterliste (Name + PIN) liegt in einem Google Sheet, gepflegt von Niclas/Rüdiger.
+   Beim Start wird die Liste geladen und lokal zwischengespeichert, damit der Login auch
+   offline funktioniert. Der eingeloggte Name wird in currentUser gehalten und kann bei
+   Aktionen (z.B. Lagerbestellungen) mitgeschickt werden. */
+const MITARBEITER_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbwzbnI6ywDiteASgmv-WGOUC-FZTumwzZSeyJcRmXP5xw6inT5h6cKqGvtKt1Y8mHSZ/exec';
+const LOGIN_STORAGE_KEY = 'voelzkeToolsLogin';
+const MITARBEITER_CACHE_KEY = 'voelzkeToolsMitarbeiterCache';
+
+let currentUser = null;       // { name, pin }
+let mitarbeiterListe = null;  // [{ name, pin }, ...]
+let pinEingabe = '';
+
+async function ladeMitarbeiterListe(){
+  if(!MITARBEITER_WEBHOOK_URL || MITARBEITER_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0){
+    mitarbeiterListe = [];
+    return mitarbeiterListe;
+  }
+  try{
+    const res = await fetch(MITARBEITER_WEBHOOK_URL);
+    const rows = await res.json();
+    if(Array.isArray(rows) && rows.length){
+      mitarbeiterListe = rows
+        .map(r => ({ name: String(r.name || '').trim(), pin: String(r.pin || '').trim() }))
+        .filter(r => r.name && r.pin);
+      localStorage.setItem(MITARBEITER_CACHE_KEY, JSON.stringify(mitarbeiterListe));
+      return mitarbeiterListe;
+    }
+  } catch(err){
+    // offline oder Sheet nicht erreichbar — auf letzten bekannten Stand zurückfallen
+  }
+  try{
+    const cached = localStorage.getItem(MITARBEITER_CACHE_KEY);
+    if(cached){ mitarbeiterListe = JSON.parse(cached); return mitarbeiterListe; }
+  } catch(err){}
+  mitarbeiterListe = [];
+  return mitarbeiterListe;
+}
+
+function pruefeGespeichertenLogin(){
+  try{
+    const raw = localStorage.getItem(LOGIN_STORAGE_KEY);
+    if(!raw) return false;
+    const saved = JSON.parse(raw);
+    const nochGueltig = (mitarbeiterListe || []).some(m => m.name === saved.name && m.pin === saved.pin);
+    if(nochGueltig){ currentUser = saved; return true; }
+    localStorage.removeItem(LOGIN_STORAGE_KEY);
+    return false;
+  } catch(err){
+    return false;
+  }
+}
+
+function updateUserBadge(){
+  const badge = el('userBadge');
+  if(!badge) return;
+  if(currentUser){
+    badge.style.display = 'flex';
+    el('userBadgeName').textContent = currentUser.name;
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function logout(){
+  localStorage.removeItem(LOGIN_STORAGE_KEY);
+  currentUser = null;
+  updateUserBadge();
+  zeigeLoginScreen();
+}
+
+function zeigeLoginScreen(fehler){
+  currentBack = null;
+  pinEingabe = '';
+  el('headerTitle').innerHTML = 'Völzke Tools<span id="headerSubtitle">Heizung · Lüftung · Sanitär</span>';
+  setChrome({ tabNav:false, bottomBar:false, prevNext:false, statusPill:false, back:false });
+  updateUserBadge();
+
+  const nichtEingerichtet = !MITARBEITER_WEBHOOK_URL || MITARBEITER_WEBHOOK_URL.indexOf('PASTE_YOUR') === 0;
+
+  el('mainContent').innerHTML = `
+    <div class="login-screen">
+      <p class="home-intro">Bitte deine persönliche PIN eingeben.</p>
+      ${nichtEingerichtet ? '<p class="legal-placeholder">Mitarbeiter-Liste ist noch nicht eingerichtet (MITARBEITER_WEBHOOK_URL fehlt).</p>' : ''}
+      <div class="pin-dots" id="pinDots">
+        <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+      </div>
+      <p class="login-error" id="loginError">${fehler ? escapeHtml(fehler) : '&nbsp;'}</p>
+      <div class="pin-keypad" id="pinKeypad">
+        ${[1,2,3,4,5,6,7,8,9].map(n=>`<button type="button" class="pin-btn" data-num="${n}">${n}</button>`).join('')}
+        <button type="button" class="pin-btn pin-btn-empty" disabled></button>
+        <button type="button" class="pin-btn" data-num="0">0</button>
+        <button type="button" class="pin-btn pin-btn-del" id="pinDel">⌫</button>
+      </div>
+    </div>
+  `;
+  el('pinKeypad').querySelectorAll('[data-num]').forEach(btn=>{
+    btn.addEventListener('click', ()=> pinZifferEingeben(btn.dataset.num));
+  });
+  el('pinDel').addEventListener('click', pinLoeschen);
+  window.scrollTo(0,0);
+}
+
+function pinDotsAktualisieren(){
+  document.querySelectorAll('#pinDots .pin-dot').forEach((d,i)=> d.classList.toggle('filled', i < pinEingabe.length));
+}
+
+function pinZifferEingeben(ziffer){
+  if(pinEingabe.length >= 4) return;
+  pinEingabe += ziffer;
+  pinDotsAktualisieren();
+  if(pinEingabe.length === 4) pinPruefen();
+}
+
+function pinLoeschen(){
+  pinEingabe = pinEingabe.slice(0, -1);
+  pinDotsAktualisieren();
+  const errEl = el('loginError');
+  if(errEl) errEl.innerHTML = '&nbsp;';
+}
+
+function pinPruefen(){
+  const treffer = (mitarbeiterListe || []).find(m => m.pin === pinEingabe);
+  if(treffer){
+    currentUser = { name: treffer.name, pin: treffer.pin };
+    localStorage.setItem(LOGIN_STORAGE_KEY, JSON.stringify(currentUser));
+    updateUserBadge();
+    showHome();
+  } else {
+    const errEl = el('loginError');
+    if(errEl) errEl.textContent = 'PIN nicht erkannt — bitte erneut versuchen.';
+    pinEingabe = '';
+    pinDotsAktualisieren();
+    // Falls die Liste evtl. veraltet ist (z.B. Mitarbeiter kurz vorher angelegt), einmal neu laden
+    ladeMitarbeiterListe();
+  }
+}
+
+async function startAuth(){
+  await ladeMitarbeiterListe();
+  if(pruefeGespeichertenLogin()){
+    updateUserBadge();
+    showHome();
+  } else {
+    zeigeLoginScreen();
+  }
+}
+
 function initApps(){
   shellNovelanApp = createNovelanApp();
   shellFroelingApp = createFroelingApp();
@@ -6240,9 +6413,10 @@ function goBack(){
 }
 
 el('backBtn').onclick = goBack;
+el('logoutBtn').onclick = logout;
 
 initApps();
-showHome();
+startAuth();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{
