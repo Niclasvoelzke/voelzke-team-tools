@@ -6091,7 +6091,8 @@ function fmtDatum(iso){
   return m ? `${m[3]}.${m[2]}.${m[1]}` : iso;
 }
 function setDefaults(){
-  if(!state.values.datum) state.values.datum = heuteIso();
+  // Datum = heute, solange das Protokoll noch nicht begonnen wurde (bleibt danach frei änderbar)
+  if(!state.values.datum || (!state.values.kunde && !state.values.auftragsnummer)) state.values.datum = heuteIso();
   if(!state.values.monteur && typeof currentUser !== 'undefined' && currentUser && currentUser.name){
     state.values.monteur = currentUser.name;
   }
@@ -6142,6 +6143,7 @@ function renderGegenstand(){
     `</div>`;
   return section('Abnahmegegenstand',
     `<div class="field"><label>Gewerk <span class="hint">— Mehrfachauswahl möglich</span></label>${chips}</div>` +
+    field('leistung','Art der Leistung / Was wurde gemacht?', {type:'textarea', placeholder:'z. B. Montage von 6 Heizkörpern im EG inkl. Thermostatventilen'}) +
     field('anlage','Geräte- bzw. Anlagendaten', {type:'textarea', placeholder:'Hersteller, Typ, Leistung, Umfang der Leistung …'}) +
     field('seriennummer','Seriennummer')
   );
@@ -6631,27 +6633,37 @@ function buildPdf(sigDims){
     y += 1.5;
   }
 
-  function checkRow(label, val){
-    doc.setFont('helvetica','normal');
-    doc.setFontSize(9);
-    const lines = doc.splitTextToSize(label, CONTENT_W - 30);
-    const h = Math.max(6.2, lines.length*4.2 + 2.2);
-    ensure(h);
-    setText(COL_TEXT);
-    doc.text(lines, MARGIN+1, y+4.3);
-    const col = chipColor(val);
-    const txt = val || '—';
-    doc.setFont('helvetica','bold');
-    doc.setFontSize(8.5);
-    const tw = Math.max(doc.getTextWidth(txt) + 6, 14);
-    doc.setFillColor(col[0],col[1],col[2]);
-    doc.roundedRect(PAGE_W-MARGIN-tw, y+0.6, tw, 5, 1.4, 1.4, 'F');
-    doc.setTextColor(255,255,255);
-    doc.text(txt, PAGE_W-MARGIN-tw/2, y+4.3, {align:'center'});
-    doc.setDrawColor(COL_LINE[0],COL_LINE[1],COL_LINE[2]);
-    doc.setLineWidth(0.15);
-    doc.line(MARGIN, y+h-0.4, PAGE_W-MARGIN, y+h-0.4);
-    y += h + 0.4;
+  // Checkliste zweispaltig: spart auf der ersten Seite Platz
+  function checkGrid(items){
+    const gap = 8, colW = (CONTENT_W - gap)/2;
+    for(let r=0; r<items.length; r+=2){
+      const pair = items.slice(r, r+2);
+      doc.setFont('helvetica','normal');
+      doc.setFontSize(8.8);
+      const lines = pair.map(it => doc.splitTextToSize(it.label, colW - 20));
+      const h = Math.max(6.2, Math.max(...lines.map(l=>l.length))*3.9 + 2.4);
+      ensure(h);
+      pair.forEach((it,ci)=>{
+        const x = MARGIN + ci*(colW+gap);
+        doc.setFont('helvetica','normal');
+        doc.setFontSize(8.8);
+        setText(COL_TEXT);
+        doc.text(lines[ci], x+1, y+4.3);
+        const col = chipColor(it.val);
+        const txt = it.val || '—';
+        doc.setFont('helvetica','bold');
+        doc.setFontSize(8.5);
+        const tw = Math.max(doc.getTextWidth(txt) + 6, 14);
+        doc.setFillColor(col[0],col[1],col[2]);
+        doc.roundedRect(x+colW-tw, y+0.6, tw, 5, 1.4, 1.4, 'F');
+        doc.setTextColor(255,255,255);
+        doc.text(txt, x+colW-tw/2, y+4.3, {align:'center'});
+        doc.setDrawColor(COL_LINE[0],COL_LINE[1],COL_LINE[2]);
+        doc.setLineWidth(0.15);
+        doc.line(x, y+h-0.4, x+colW, y+h-0.4);
+      });
+      y += h + 0.4;
+    }
   }
 
   function paragraphBox(text){
@@ -6680,12 +6692,13 @@ function buildPdf(sigDims){
   // ---- Abnahmegegenstand ----
   sectionTitle('Abnahmegegenstand');
   kvGrid([
+    [['Art der Leistung / ausgeführte Arbeiten', v.leistung], null],
     [['Geräte- bzw. Anlagendaten', v.anlage], ['Seriennummer', v.seriennummer]],
   ]);
 
   // ---- Checkliste ----
   sectionTitle('Checkliste');
-  CHECKLISTE.forEach(c=> checkRow(c.label, state.checks[c.id] || ''));
+  checkGrid(CHECKLISTE.map(c=>({ label:c.label, val: state.checks[c.id] || '' })));
   if((v.einstellwerte || '').trim()){
     y += 2;
     kvGrid([[['Einstellwerte / Bemerkungen', v.einstellwerte.trim()], null]]);
