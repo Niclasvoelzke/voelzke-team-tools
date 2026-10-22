@@ -1026,6 +1026,11 @@ input[type=time]:focus{outline:none;border-color:var(--blue-mid);}
   background:rgba(255,255,255,.15);border:none;color:#fff;border-radius:99px;
   width:22px;height:22px;line-height:1;font-size:13px;cursor:pointer;flex:none;
 }
+/* ---- IBN: Einwilligung / Bestätigung per Checkbox ---- */
+.consent-check{display:flex;gap:12px;align-items:flex-start;background:#f5f8fb;border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px;cursor:pointer;}
+.consent-check input{width:22px;height:22px;flex:none;margin:1px 0 0;accent-color:var(--blue-mid);}
+.consent-check .cc-title{display:block;font-size:13px;font-weight:700;color:var(--blue-dark);margin-bottom:4px;}
+.consent-check .cc-text{display:block;font-size:12.5px;color:#33475a;line-height:1.45;}
 /* ---- Abnahmeprotokoll ---- */
 .abn-mangel{border:1px solid var(--line);border-radius:10px;padding:10px 12px 2px;margin-bottom:12px;background:#fbfcfe;}
 .abn-mangel-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
@@ -1454,6 +1459,68 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
 </script>
 
 <script>
+/* ============================================================
+   IBN-PROTOKOLLE — gemeinsame Erklärungen vor den Unterschriften
+   (Novelan, Fröling, Remeha). Ankreuzen ist freiwillig; im PDF
+   erscheint jede Erklärung mit leerem oder angekreuztem Kästchen.
+   ============================================================ */
+const IBN_ERKLAERUNGEN = [
+  { id:'einv_fotos',
+    title:'Einwilligung zur Verwendung von Fotos',
+    text:'Ich bin damit einverstanden, dass Völzke Heizung · Lüftung · Sanitär Fotos der installierten Anlage für Referenz- und Werbezwecke verwendet, z. B. auf der Website, in sozialen Medien oder in Printmedien. Name, Anschrift und sonstige persönliche Angaben werden dabei nicht veröffentlicht. Die Einwilligung ist freiwillig und kann jederzeit mit Wirkung für die Zukunft widerrufen werden.' },
+  { id:'best_korrosion',
+    title:'Korrosionsschutz der Brauchwasser-Wärmepumpe',
+    text:'Ich wurde über Funktion und Bedeutung des Korrosionsschutzes (Fremdstromanode) der Brauchwasser-Wärmepumpe informiert. Mir ist bewusst, dass das Gerät dauerhaft mit Strom versorgt bleiben muss und nicht über längere Zeit ausgeschaltet oder vom Netz getrennt werden darf, da der Korrosionsschutz sonst nicht wirkt und der Speicher Schaden nehmen kann.' },
+];
+
+// Formular: Checkboxen. setValue() ist in jedem IBN-Modul auf window gebunden.
+function ibnErklaerungenHtml(values){
+  const esc = t => String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return IBN_ERKLAERUNGEN.map(e=>`
+    <label class="consent-check">
+      <input type="checkbox" ${values[e.id]==='Ja'?'checked':''} onchange="setValue('${e.id}', this.checked ? 'Ja' : '')">
+      <span><span class="cc-title">${esc(e.title)}</span><span class="cc-text">${esc(e.text)}</span></span>
+    </label>`).join('');
+}
+
+const IBN_ERKL_TEXT_W = 210 - 2*15 - 8;
+function ibnErklaerungenHoehe(doc){
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(9);
+  return IBN_ERKLAERUNGEN.reduce((h,e)=> h + 6 + doc.splitTextToSize(e.text, IBN_ERKL_TEXT_W).length*4.1 + 4, 2);
+}
+// Zeichnet die Erklärungen ab Position y und gibt das neue y zurück.
+function ibnErklaerungenZeichnen(doc, y, values){
+  const X = 15;
+  IBN_ERKLAERUNGEN.forEach(e=>{
+    const on = values[e.id] === 'Ja';
+    doc.setDrawColor(13,47,82);
+    doc.setLineWidth(0.4);
+    doc.setFillColor(255,255,255);
+    doc.rect(X, y-3.4, 4.2, 4.2, 'S');
+    if(on){
+      doc.setDrawColor(31,158,90);
+      doc.setLineWidth(0.7);
+      doc.line(X+0.8, y-1.3, X+1.8, y-0.2);
+      doc.line(X+1.8, y-0.2, X+3.6, y-2.9);
+    }
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(10);
+    doc.setTextColor(13,47,82);
+    doc.text(e.title, X+8, y);
+    y += 5;
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(9);
+    doc.setTextColor(27,39,51);
+    const lines = doc.splitTextToSize(e.text, IBN_ERKL_TEXT_W);
+    doc.text(lines, X+8, y);
+    y += lines.length*4.1 + 5;
+  });
+  return y + 2;
+}
+</script>
+
+<script>
 function createNovelanApp(){
 
 /* ============================================================
@@ -1734,6 +1801,7 @@ function renderPhotosTab(){
     <div class="section">
       <div class="section-header"><h3>Bestätigung</h3></div>
       <div class="section-body">
+        ${ibnErklaerungenHtml(state.values)}
         <div class="confirm-box">Hiermit bestätige ich die Richtigkeit der oben genannten Angaben.</div>
 
         <div class="field">
@@ -2293,6 +2361,9 @@ function buildPdf(){
     y += 10;
   }
 
+  ensure(ibnErklaerungenHoehe(doc));
+  y = ibnErklaerungenZeichnen(doc, y, state.values);
+
   signatureBlock('Unterschrift Kunde', 'kunde_unterschrift', 'kunde_datum');
   signatureBlock('Unterschrift Techniker', 'techniker_unterschrift', 'techniker_datum');
 
@@ -2617,6 +2688,7 @@ function renderSignaturesTab(){
     <div class="section">
       <div class="section-header"><h3>Bestätigung</h3></div>
       <div class="section-body">
+        ${ibnErklaerungenHtml(state.values)}
         <div class="confirm-box">Hiermit bestätige ich die Richtigkeit der oben genannten Angaben.</div>
 
         <div class="field">
@@ -3167,6 +3239,9 @@ function buildPdf(){
     y += 10;
   }
 
+  ensure(ibnErklaerungenHoehe(doc));
+  y = ibnErklaerungenZeichnen(doc, y, state.values);
+
   signatureBlock('Unterschrift Kunde', 'kunde_unterschrift', 'kunde_datum');
   signatureBlock('Unterschrift Techniker', 'techniker_unterschrift', 'techniker_datum');
 
@@ -3575,6 +3650,7 @@ function renderAbschlussTab(){
     <div class="section">
       <div class="section-header"><h3>Bestätigung der Inbetriebnahme</h3></div>
       <div class="section-body">
+        ${ibnErklaerungenHtml(state.values)}
         <div class="confirm-box">Das Protokoll wird mit dem KD-Vorgang zugestellt.</div>
 
         <div class="field">
@@ -4230,6 +4306,9 @@ function buildPdf(){
     }
     y += boxH + 10;
   }
+
+  ensure(ibnErklaerungenHoehe(doc));
+  y = ibnErklaerungenZeichnen(doc, y, state.values);
 
   signatureBlock('Unterschrift Techniker', 'techniker_unterschrift');
   signatureBlock('Unterschrift Auftraggeber', 'auftraggeber_unterschrift');
@@ -6092,7 +6171,7 @@ function fmtDatum(iso){
 }
 function setDefaults(){
   // Datum = heute, solange das Protokoll noch nicht begonnen wurde (bleibt danach frei änderbar)
-  if(!state.values.datum || (!state.values.kunde && !state.values.auftragsnummer)) state.values.datum = heuteIso();
+  if(!state.values.datum || !state.values.kunde) state.values.datum = heuteIso();
   if(!state.values.monteur && typeof currentUser !== 'undefined' && currentUser && currentUser.name){
     state.values.monteur = currentUser.name;
   }
@@ -6131,7 +6210,6 @@ function renderKopf(){
   return section('Kopfdaten',
     field('kunde','Kunde', {placeholder:'Name / Firma'}) +
     field('adresse','Adresse', {type:'textarea', placeholder:'Straße, PLZ Ort (Ort der Leistung)'}) +
-    field('auftragsnummer','Auftragsnummer') +
     field('datum','Datum', {type:'date'}) +
     field('monteur','Monteur')
   );
@@ -6144,8 +6222,7 @@ function renderGegenstand(){
   return section('Abnahmegegenstand',
     `<div class="field"><label>Gewerk <span class="hint">— Mehrfachauswahl möglich</span></label>${chips}</div>` +
     field('leistung','Art der Leistung / Was wurde gemacht?', {type:'textarea', placeholder:'z. B. Montage von 6 Heizkörpern im EG inkl. Thermostatventilen'}) +
-    field('anlage','Geräte- bzw. Anlagendaten', {type:'textarea', placeholder:'Hersteller, Typ, Leistung, Umfang der Leistung …'}) +
-    field('seriennummer','Seriennummer')
+    field('anlage','Geräte- bzw. Anlagendaten', {type:'textarea', placeholder:'Hersteller, Typ, Leistung …'})
   );
 }
 
@@ -6575,8 +6652,7 @@ function buildPdf(sigDims){
     doc.text('Abnahmeprotokoll', MARGIN, 15);
     doc.setFont('helvetica','normal');
     doc.setFontSize(9);
-    const sub = [state.gewerk.length ? 'Gewerk: ' + state.gewerk.join(', ') : '', v.auftragsnummer ? 'Auftrag ' + v.auftragsnummer : '']
-      .filter(Boolean).join('   ·   ');
+    const sub = state.gewerk.length ? 'Gewerk: ' + state.gewerk.join(', ') : '';
     if(sub) doc.text(sub, MARGIN, 21.5);
     // Logo-Karte oben rechts (weiß, damit das Logo in Originalfarben lesbar bleibt)
     const cardW = 42, cardH = 20, cardX = PAGE_W-MARGIN-cardW, cardY = 4;
@@ -6684,16 +6760,15 @@ function buildPdf(sigDims){
   coverHeader();
   sectionTitle('Kopfdaten');
   kvGrid([
-    [['Kunde', v.kunde], ['Auftragsnummer', v.auftragsnummer]],
-    [['Adresse', v.adresse], ['Datum', fmtDatum(v.datum)]],
-    [['Monteur', v.monteur], ['Gewerk', state.gewerk.join(', ')]],
+    [['Kunde', v.kunde], ['Datum', fmtDatum(v.datum)]],
+    [['Adresse', v.adresse], ['Monteur', v.monteur]],
   ]);
 
   // ---- Abnahmegegenstand ----
   sectionTitle('Abnahmegegenstand');
   kvGrid([
     [['Art der Leistung / ausgeführte Arbeiten', v.leistung], null],
-    [['Geräte- bzw. Anlagendaten', v.anlage], ['Seriennummer', v.seriennummer]],
+    [['Gewerk', state.gewerk.join(', ')], ['Geräte- bzw. Anlagendaten', v.anlage]],
   ]);
 
   // ---- Checkliste ----
@@ -6818,7 +6893,7 @@ function buildPdf(sigDims){
     doc.setFontSize(8);
     setText(COL_MUTED);
     doc.text('Fotoanhang zum Abnahmeprotokoll', MARGIN, y);
-    const rechts = [v.kunde, v.auftragsnummer ? 'Auftrag ' + v.auftragsnummer : ''].filter(Boolean).join(' · ');
+    const rechts = v.kunde || '';
     if(rechts) doc.text(doc.splitTextToSize(rechts, 90)[0], PAGE_W-MARGIN, y, {align:'right'});
     y += 9;
     doc.setFont('helvetica','bold');
@@ -6862,7 +6937,7 @@ function buildPdf(sigDims){
     doc.setFont('helvetica','normal');
     doc.setFontSize(8);
     setText(COL_MUTED);
-    doc.text('Völzke Heizung · Lüftung · Sanitär — Abnahmeprotokoll' + (v.auftragsnummer ? ' · Auftrag ' + v.auftragsnummer : ''), MARGIN+5.5, PAGE_H-6);
+    doc.text('Völzke Heizung · Lüftung · Sanitär — Abnahmeprotokoll', MARGIN+5.5, PAGE_H-6);
     doc.text('Seite ' + i + ' von ' + total, PAGE_W-MARGIN, PAGE_H-6, {align:'right'});
   }
 
@@ -6885,7 +6960,7 @@ async function exportPdf(){
   catch(err){ console.error(err); showToast('PDF-Fehler: ' + err.message); return; }
 
   const sauber = s => String(s || '').trim().replace(/[^a-z0-9äöüß]+/gi,'_').replace(/^_+|_+$/g,'');
-  const kunde = sauber(state.values.kunde) || sauber(state.values.auftragsnummer) || 'Kunde';
+  const kunde = sauber(state.values.kunde) || 'Kunde';
   const datum = state.values.datum || heuteIso();
   const filename = `Abnahmeprotokoll_${kunde}_${datum}.pdf`;
 
