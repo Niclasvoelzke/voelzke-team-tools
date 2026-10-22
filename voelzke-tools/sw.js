@@ -1,7 +1,7 @@
 // Service Worker – Völzke Tools (IBN-Protokolle + Checklisten in einer App)
 // Cached die App beim ersten Laden, damit sie danach komplett offline funktioniert.
 
-const CACHE_NAME = 'voelzke-tools-v9'; // bei jedem Deploy erhöhen, sonst bleiben alte Geräte auf altem Stand
+const CACHE_NAME = 'voelzke-tools-v10'; // bei jedem Deploy erhöhen, sonst bleiben alte Geräte auf altem Stand
 const ASSETS = [
   './',
   './index_5.html',

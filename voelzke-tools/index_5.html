@@ -1031,6 +1031,30 @@ input[type=time]:focus{outline:none;border-color:var(--blue-mid);}
 .consent-check input{width:22px;height:22px;flex:none;margin:1px 0 0;accent-color:var(--blue-mid);}
 .consent-check .cc-title{display:block;font-size:13px;font-weight:700;color:var(--blue-dark);margin-bottom:4px;}
 .consent-check .cc-text{display:block;font-size:12.5px;color:#33475a;line-height:1.45;}
+/* ---- Zeiterfassung (Prototyp) ---- */
+.zt-proto{font-size:10.5px;font-weight:700;color:var(--blue-dark);background:var(--yellow);border-radius:99px;padding:3px 9px;}
+.zt-status{font-size:15px;font-weight:700;border-radius:10px;padding:12px;margin-bottom:12px;text-align:center;}
+.zt-status.on{background:#e3f5ec;color:var(--ok);}
+.zt-status.off{background:#eef2f6;color:var(--muted);}
+.zt-btn{display:block;width:100%;border:none;border-radius:12px;padding:18px;font-size:17px;font-weight:800;color:#fff;cursor:pointer;}
+.zt-btn.kommen{background:var(--ok);}
+.zt-btn.gehen{background:var(--blue);}
+.zt-btn:disabled{opacity:.6;}
+.zt-summe{font-size:13px;font-weight:800;color:var(--blue-dark);}
+.zt-row{display:grid;grid-template-columns:70px 52px 1fr;gap:8px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);}
+.zt-row:last-child{border-bottom:none;}
+.zt-typ{font-size:12px;font-weight:700;border-radius:99px;padding:4px 0;text-align:center;}
+.zt-typ.kommen{background:#e3f5ec;color:var(--ok);}
+.zt-typ.gehen{background:#e3edf7;color:var(--blue);}
+.zt-zeit{font-size:16px;font-weight:800;color:var(--text);}
+.zt-meta{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.zt-tag{font-size:11px;font-weight:700;color:#a86b00;}
+.zt-ort{font-size:11.5px;color:var(--blue-mid);text-decoration:none;}
+.zt-ort-fehlt{color:var(--bad);}
+.zt-woche-row{display:grid;grid-template-columns:78px 1fr auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;}
+.zt-woche-row.heute{font-weight:700;}
+.zt-spanne{color:var(--muted);font-size:12px;}
+.zt-warn{color:var(--bad);font-weight:700;font-size:11px;}
 /* ---- Abnahmeprotokoll ---- */
 .abn-mangel{border:1px solid var(--line);border-radius:10px;padding:10px 12px 2px;margin-bottom:12px;background:#fbfcfe;}
 .abn-mangel-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
@@ -7033,6 +7057,361 @@ return { start };
 </script>
 
 <script>
+function createZeiterfassungApp(){
+
+/* ============================================================
+   ZEITERFASSUNG — PROTOTYP
+   - Zugang per Code (nur Niclas/Rüdiger). Der Code wird nur als SHA-256-Hash
+     im Quelltext geführt. Das ist ein Sichtschutz, keine echte Sicherheit:
+     für den Echtbetrieb muss die Prüfung auf den Server (Apps Script).
+   - Kommen/Gehen buchen. Gespeichert werden immer:
+       * tatsächlicher Buchungszeitpunkt (nicht änderbar)
+       * angegebene Uhrzeit (z. B. "bin um 16:30 gegangen", wenn später gebucht)
+       * GPS-Position im Moment der Buchung (falls freigegeben)
+   - Daten liegen im Prototyp NUR auf diesem Gerät (localStorage).
+   ============================================================ */
+
+const ZUGANG_HASH = '4681639741f445ef193092a92a0d77973f1f497144139fb45798b288edfd242e';
+const STORAGE_KEY = 'voelzkeZeiterfassungPrototyp';
+const HINWEIS_KEY = 'voelzkeZeiterfassungHinweisBestaetigt';
+const NACHTRAG_TOLERANZ_MIN = 5; // Abweichung ab der eine Buchung als "nachgetragen" markiert wird
+
+let entsperrt = false;
+let codeEingabe = '';
+let gpsLaeuft = false;
+
+function el(id){ return document.getElementById(id); }
+function escapeHtml(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function showToast(msg){
+  const t = el('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(()=>t.classList.remove('show'), 2200);
+}
+function nutzerName(){
+  return (typeof currentUser !== 'undefined' && currentUser && currentUser.name) ? currentUser.name : 'Unbekannt';
+}
+
+/* ---- Speicher ---- */
+function ladeBuchungen(){
+  try{ return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch(e){ return []; }
+}
+function speichereBuchungen(list){
+  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); return true; }
+  catch(e){ showToast('Speichern fehlgeschlagen'); return false; }
+}
+function meineBuchungen(){
+  const name = nutzerName();
+  return ladeBuchungen().filter(b => b.user === name)
+    .sort((a,b)=> new Date(a.angegeben) - new Date(b.angegeben));
+}
+
+/* ---- Zeit-Helfer ---- */
+function pad(n){ return String(n).padStart(2,'0'); }
+function uhrzeit(iso){ const d = new Date(iso); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+function tagKey(d){ d = new Date(d); return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()); }
+function dauerText(min){
+  if(min == null || isNaN(min)) return '—';
+  const h = Math.floor(min/60), m = Math.round(min%60);
+  return h + ':' + pad(m) + ' h';
+}
+const WOCHENTAGE = ['So','Mo','Di','Mi','Do','Fr','Sa'];
+
+function aktuellerStatus(list){
+  const letzte = list[list.length-1];
+  return (letzte && letzte.typ === 'kommen') ? letzte : null; // eingestempelt seit ...
+}
+
+// Kommen/Gehen paarweise zu Arbeitsblöcken zusammenfassen (Basis: angegebene Zeit)
+function bloecke(list){
+  const out = [];
+  let offen = null;
+  list.forEach(b=>{
+    if(b.typ === 'kommen'){ if(offen) out.push({ von:offen, bis:null }); offen = b; }
+    else if(b.typ === 'gehen'){ out.push({ von:offen, bis:b }); offen = null; }
+  });
+  if(offen) out.push({ von:offen, bis:null });
+  return out;
+}
+function blockMinuten(bl){
+  if(!bl.von || !bl.bis) return 0;
+  return Math.max(0, (new Date(bl.bis.angegeben) - new Date(bl.von.angegeben)) / 60000);
+}
+
+/* ---- GPS ---- */
+function holePosition(){
+  return new Promise(resolve=>{
+    if(!('geolocation' in navigator)){ resolve({ gps:null, fehler:'Gerät liefert keinen Standort' }); return; }
+    navigator.geolocation.getCurrentPosition(
+      p => resolve({ gps:{ lat:+p.coords.latitude.toFixed(6), lng:+p.coords.longitude.toFixed(6), genauigkeit: Math.round(p.coords.accuracy) }, fehler:null }),
+      e => resolve({ gps:null, fehler: e.code === 1 ? 'Standort nicht freigegeben' : 'Standort nicht ermittelbar' }),
+      { enableHighAccuracy:true, timeout:12000, maximumAge:0 }
+    );
+  });
+}
+
+/* ============================================================
+   ZUGANGSCODE
+   ============================================================ */
+async function sha256(text){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+function renderCodeScreen(fehler){
+  codeEingabe = '';
+  el('mainContent').innerHTML = `
+    <div class="login-screen">
+      <div style="font-size:34px;margin-top:6px;">🔒</div>
+      <p class="home-intro" style="margin-top:6px;">Zeiterfassung ist noch ein Prototyp.<br>Bitte Zugangscode eingeben.</p>
+      <div class="pin-dots" id="ztDots">
+        <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+      </div>
+      <p class="login-error" id="ztFehler">${fehler ? escapeHtml(fehler) : '&nbsp;'}</p>
+      <div class="pin-keypad" id="ztKeypad">
+        ${[1,2,3,4,5,6,7,8,9].map(n=>`<button type="button" class="pin-btn" data-num="${n}">${n}</button>`).join('')}
+        <button type="button" class="pin-btn pin-btn-empty" disabled></button>
+        <button type="button" class="pin-btn" data-num="0">0</button>
+        <button type="button" class="pin-btn pin-btn-del" id="ztDel">⌫</button>
+      </div>
+    </div>`;
+  el('ztKeypad').querySelectorAll('[data-num]').forEach(btn=>{
+    btn.addEventListener('click', ()=> codeZiffer(btn.dataset.num));
+  });
+  el('ztDel').addEventListener('click', ()=>{
+    codeEingabe = codeEingabe.slice(0,-1); codeDots();
+    el('ztFehler').innerHTML = '&nbsp;';
+  });
+  window.scrollTo(0,0);
+}
+function codeDots(){
+  document.querySelectorAll('#ztDots .pin-dot').forEach((d,i)=> d.classList.toggle('filled', i < codeEingabe.length));
+}
+async function codeZiffer(z){
+  if(codeEingabe.length >= 4) return;
+  codeEingabe += z;
+  codeDots();
+  if(codeEingabe.length < 4) return;
+  let ok = false;
+  try{ ok = (await sha256(codeEingabe)) === ZUGANG_HASH; } catch(e){}
+  if(ok){ entsperrt = true; render(); }
+  else renderCodeScreen('Code falsch — bitte erneut versuchen.');
+}
+
+/* ============================================================
+   HAUPTANSICHT
+   ============================================================ */
+function render(){
+  if(!entsperrt){ renderCodeScreen(); return; }
+
+  let hinweisOk = false;
+  try{ hinweisOk = localStorage.getItem(HINWEIS_KEY + ':' + nutzerName()) === 'ja'; } catch(e){}
+  if(!hinweisOk){ renderHinweis(); return; }
+
+  const list = meineBuchungen();
+  const offen = aktuellerStatus(list);
+  const jetzt = new Date();
+  const jetztZeit = pad(jetzt.getHours()) + ':' + pad(jetzt.getMinutes());
+
+  const statusHtml = offen
+    ? `<div class="zt-status on">● Eingestempelt seit ${uhrzeit(offen.angegeben)} Uhr</div>`
+    : `<div class="zt-status off">○ Nicht eingestempelt</div>`;
+
+  const aktion = offen ? 'gehen' : 'kommen';
+  const buchenHtml = `
+    <div class="field">
+      <label>${offen ? 'Feierabend um' : 'Arbeitsbeginn um'} <span class="hint">— nur ändern, wenn du später buchst</span></label>
+      <input type="time" id="ztZeit" value="${jetztZeit}">
+    </div>
+    <button type="button" class="zt-btn ${aktion}" id="ztBuchen" ${gpsLaeuft?'disabled':''}>
+      ${gpsLaeuft ? 'Standort wird ermittelt…' : (offen ? '⏹ Gehen buchen' : '▶ Kommen buchen')}
+    </button>
+    <p class="subtitle" style="margin:8px 0 0;">Gespeichert werden Buchungszeitpunkt, angegebene Uhrzeit und dein Standort im Moment der Buchung.</p>`;
+
+  el('mainContent').innerHTML = `
+    <div class="section">
+      <div class="section-header"><h3>${escapeHtml(nutzerName())}</h3><span class="zt-proto">Prototyp</span></div>
+      <div class="section-body">${statusHtml}${buchenHtml}</div>
+    </div>
+    ${renderHeute(list)}
+    ${renderWoche(list)}
+    <div class="section">
+      <div class="section-header"><h3>Prototyp</h3></div>
+      <div class="section-body">
+        <p class="subtitle" style="margin:0 0 10px;">Die Buchungen liegen nur auf diesem Gerät und werden noch nicht an die Firma übertragen.</p>
+        <button type="button" class="abn-btn light" id="ztExport">Buchungen als CSV teilen</button>
+        <button type="button" class="abn-btn light" id="ztLoeschen" style="color:var(--bad);">Testdaten auf diesem Gerät löschen</button>
+      </div>
+    </div>`;
+
+  el('ztBuchen').addEventListener('click', ()=> buchen(aktion));
+  el('ztExport').addEventListener('click', exportCsv);
+  el('ztLoeschen').addEventListener('click', loeschen);
+}
+
+function buchungZeile(b){
+  const nachtrag = b.nachtrag
+    ? `<span class="zt-tag">nachgetragen · gebucht ${uhrzeit(b.buchung)}</span>` : '';
+  const ort = b.gps
+    ? `<a class="zt-ort" href="https://maps.google.com/?q=${b.gps.lat},${b.gps.lng}" target="_blank" rel="noopener">📍 Standort (±${b.gps.genauigkeit} m)</a>`
+    : `<span class="zt-ort zt-ort-fehlt">📍 ${escapeHtml(b.gpsFehler || 'kein Standort')}</span>`;
+  return `<div class="zt-row">
+    <div class="zt-typ ${b.typ}">${b.typ === 'kommen' ? 'Kommen' : 'Gehen'}</div>
+    <div class="zt-zeit">${uhrzeit(b.angegeben)}</div>
+    <div class="zt-meta">${nachtrag}${ort}</div>
+  </div>`;
+}
+
+function renderHeute(list){
+  const heute = tagKey(new Date());
+  const heuteList = list.filter(b => tagKey(b.angegeben) === heute);
+  const summe = bloecke(heuteList).reduce((s,bl)=> s + blockMinuten(bl), 0);
+  return `<div class="section">
+    <div class="section-header"><h3>Heute</h3><span class="zt-summe">${dauerText(summe)}</span></div>
+    <div class="section-body">
+      ${heuteList.length ? heuteList.map(buchungZeile).join('') : '<p class="subtitle" style="margin:0 0 8px;">Noch keine Buchung heute.</p>'}
+    </div>
+  </div>`;
+}
+
+function renderWoche(list){
+  const heute = new Date(); heute.setHours(0,0,0,0);
+  const montag = new Date(heute); montag.setDate(heute.getDate() - ((heute.getDay()+6)%7));
+  let gesamt = 0;
+  const zeilen = [];
+  for(let i=0;i<7;i++){
+    const d = new Date(montag); d.setDate(montag.getDate()+i);
+    const key = tagKey(d);
+    const tagList = list.filter(b => tagKey(b.angegeben) === key);
+    const bl = bloecke(tagList);
+    const min = bl.reduce((s,x)=> s + blockMinuten(x), 0);
+    gesamt += min;
+    const offen = bl.some(x => x.von && !x.bis) && key !== tagKey(new Date());
+    const spanne = tagList.length ? uhrzeit(tagList[0].angegeben) + '–' + (tagList[tagList.length-1].typ === 'gehen' ? uhrzeit(tagList[tagList.length-1].angegeben) : '…') : '';
+    zeilen.push(`<div class="zt-woche-row ${key===tagKey(new Date())?'heute':''}">
+      <span>${WOCHENTAGE[d.getDay()]} ${pad(d.getDate())}.${pad(d.getMonth()+1)}.</span>
+      <span class="zt-spanne">${spanne}${offen ? ' <span class="zt-warn">Gehen fehlt</span>' : ''}</span>
+      <strong>${min ? dauerText(min) : '—'}</strong>
+    </div>`);
+  }
+  return `<div class="section">
+    <div class="section-header"><h3>Diese Woche</h3><span class="zt-summe">${dauerText(gesamt)}</span></div>
+    <div class="section-body">${zeilen.join('')}<p class="subtitle" style="margin:8px 0 6px;">Zeiten ohne Pausenabzug.</p></div>
+  </div>`;
+}
+
+/* ---- Einmaliger Hinweis (Ersatz für die spätere unterschriebene Kenntnisnahme) ---- */
+function renderHinweis(){
+  el('mainContent').innerHTML = `
+    <div class="section">
+      <div class="section-header"><h3>Hinweis zur Zeiterfassung</h3></div>
+      <div class="section-body">
+        <div class="confirm-box">
+          Bei jeder Buchung über die App werden gespeichert: der tatsächliche Buchungszeitpunkt, die von dir angegebene Uhrzeit
+          und dein Standort im Moment der Buchung. Der Standort wird nur beim Antippen von „Kommen“ oder „Gehen“ abgefragt,
+          nicht dauerhaft. Die Daten dienen ausschließlich der Arbeitszeiterfassung.
+        </div>
+        <label class="consent-check">
+          <input type="checkbox" id="ztHinweisCheck">
+          <span><span class="cc-title">Kenntnisnahme</span><span class="cc-text">Ich habe den Hinweis gelesen und zur Kenntnis genommen.</span></span>
+        </label>
+        <button type="button" class="abn-btn primary" id="ztHinweisOk">Weiter</button>
+      </div>
+    </div>`;
+  el('ztHinweisOk').addEventListener('click', ()=>{
+    if(!el('ztHinweisCheck').checked){ showToast('Bitte Kenntnisnahme bestätigen'); return; }
+    try{ localStorage.setItem(HINWEIS_KEY + ':' + nutzerName(), 'ja'); } catch(e){}
+    render();
+  });
+}
+
+/* ---- Buchen ---- */
+async function buchen(typ){
+  if(gpsLaeuft) return;
+  const buchung = new Date();
+  const zeitWert = (el('ztZeit') && el('ztZeit').value) || '';
+  let angegeben = new Date(buchung);
+  const m = /^(\d{2}):(\d{2})$/.exec(zeitWert);
+  if(m){ angegeben.setHours(+m[1], +m[2], 0, 0); }
+  // Liegt die angegebene Uhrzeit "in der Zukunft" (z. B. 23:50 nach Mitternacht gebucht) → Vortag
+  if(angegeben - buchung > 60*60000){ angegeben.setDate(angegeben.getDate()-1); }
+
+  const list = meineBuchungen();
+  const letzte = list[list.length-1];
+  if(angegeben - buchung > NACHTRAG_TOLERANZ_MIN*60000){
+    showToast('Uhrzeit liegt in der Zukunft'); return;
+  }
+  if(letzte && new Date(angegeben) < new Date(letzte.angegeben)){
+    showToast('Uhrzeit liegt vor der letzten Buchung (' + uhrzeit(letzte.angegeben) + ')'); return;
+  }
+
+  gpsLaeuft = true; render();
+  const pos = await holePosition();
+  gpsLaeuft = false;
+
+  const eintrag = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2,7),
+    user: nutzerName(),
+    typ,
+    buchung: buchung.toISOString(),
+    angegeben: angegeben.toISOString(),
+    nachtrag: Math.abs(buchung - angegeben) > NACHTRAG_TOLERANZ_MIN*60000,
+    gps: pos.gps,
+    gpsFehler: pos.fehler,
+    quelle: 'app',
+  };
+  const alle = ladeBuchungen();
+  alle.push(eintrag);
+  if(speichereBuchungen(alle)){
+    showToast((typ === 'kommen' ? 'Kommen' : 'Gehen') + ' gebucht: ' + uhrzeit(eintrag.angegeben) + (pos.gps ? '' : ' (ohne Standort)'));
+  }
+  render();
+}
+
+/* ---- Export / Löschen ---- */
+function exportCsv(){
+  const list = meineBuchungen();
+  if(!list.length){ showToast('Noch keine Buchungen'); return; }
+  const kopf = ['Mitarbeiter','Art','Angegebene Zeit','Buchungszeitpunkt','Nachgetragen','Breitengrad','Längengrad','Genauigkeit (m)','Standort-Hinweis'];
+  const fmt = iso => { const d = new Date(iso); return `${pad(d.getDate())}.${pad(d.getMonth()+1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const zeilen = list.map(b => [
+    b.user, b.typ === 'kommen' ? 'Kommen' : 'Gehen', fmt(b.angegeben), fmt(b.buchung), b.nachtrag ? 'ja' : 'nein',
+    b.gps ? String(b.gps.lat).replace('.',',') : '', b.gps ? String(b.gps.lng).replace('.',',') : '', b.gps ? b.gps.genauigkeit : '', b.gpsFehler || ''
+  ]);
+  const csv = '﻿' + [kopf, ...zeilen].map(r => r.map(v => '"' + String(v).replace(/"/g,'""') + '"').join(';')).join('\r\n');
+  const name = 'Zeiterfassung_' + nutzerName().replace(/[^a-z0-9äöüß]+/gi,'_') + '_' + tagKey(new Date()) + '.csv';
+  const blob = new Blob([csv], { type:'text/csv;charset=utf-8' });
+  let file = null;
+  try{ file = new File([blob], name, { type:'text/csv' }); }catch(e){}
+  if(file && navigator.canShare && navigator.canShare({ files:[file] })){
+    navigator.share({ files:[file], title:name }).catch(()=>{});
+  } else {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 4000);
+  }
+}
+
+function loeschen(){
+  if(!confirm('Alle Test-Buchungen von ' + nutzerName() + ' auf diesem Gerät löschen?')) return;
+  const name = nutzerName();
+  speichereBuchungen(ladeBuchungen().filter(b => b.user !== name));
+  showToast('Testdaten gelöscht');
+  render();
+}
+
+function open(){ render(); }
+
+return { open };
+}
+</script>
+
+<script>
 /* ============================================================
    SHELL — Navigation zwischen Kategorien, Listen und Werkzeugen
    ============================================================ */
@@ -7054,6 +7433,12 @@ const TOOL_CATALOG = {
     title: 'Abnahmeprotokoll',
     desc: 'Abnahme mit Kunde: Checkliste, Mängel, Fotos & Unterschrift',
     direct: true // öffnet direkt das Formular statt einer Unterliste
+  },
+  zeiterfassung: {
+    icon: '⏱️',
+    title: 'Zeiterfassung',
+    desc: 'Prototyp · Kommen/Gehen mit Uhrzeit & Standort (🔒 Code)',
+    direct: true
   },
   checklisten: {
     icon: '✅',
@@ -7081,6 +7466,7 @@ let shellChecklistenApp = null;
 let shellLagerHugoApp = null;
 let shellNeubauApp = null;
 let shellAbnahmeApp = null;
+let shellZeitApp = null;
 
 // Jeder Screen setzt currentBack auf die Funktion, die beim Antippen von
 // "Zurück" aufgerufen werden soll — so muss goBack() nicht wissen, aus
@@ -7245,6 +7631,7 @@ function initApps(){
   shellLagerHugoApp = createLagerHugoApp();
   shellNeubauApp = createNeubauApp();
   shellAbnahmeApp = createAbnahmeApp();
+  shellZeitApp = createZeiterfassungApp();
 
   // Checklisten-Kacheln aus dem Modul selbst befüllen (Icon/Titel/Beschreibung bleiben dort gepflegt).
   // Die Lagerkontrolle liegt jetzt unter Lager → Rote Halle und wird hier aus der Liste ausgeblendet.
@@ -7382,6 +7769,14 @@ function openBestellungen(){
 /* ---- Direkt-Kacheln auf der Startseite (ohne Unterliste) ---- */
 function openDirectTool(key){
   if(key === 'abnahme') openAbnahme();
+  else if(key === 'zeiterfassung') openZeiterfassung();
+}
+
+function openZeiterfassung(){
+  currentBack = showHome;
+  el('headerTitle').innerHTML = 'Zeiterfassung<span id="headerSubtitle">Prototyp · Völzke Heizung · Lüftung · Sanitär</span>';
+  setChrome({ tabNav:false, bottomBar:false, prevNext:false, statusPill:false, back:true });
+  shellZeitApp.open();
 }
 
 function openAbnahme(){
