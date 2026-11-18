@@ -7451,7 +7451,7 @@ const TOOL_CATALOG = {
     title: 'Lager',
     desc: 'Lagerhaltung und -kontrolle an den Standorten',
     items: [
-      { key:'rote_halle', icon:'🔴', title:'Rote Halle', desc:'Lagerkontrolle & Protokoll' },
+      { key:'rote_halle', icon:'🔴', title:'Rote Halle', desc:'Lagerkontrolle, Protokoll & Kommissionsregal' },
       { key:'hugo',        icon:'🏬', title:'Hugo',        desc:'Lagerhaltung erfassen & Übersicht' },
       { key:'neubau',       icon:'🏗️', title:'Neubau',      desc:'Stellplätze erfassen & Übersicht' },
       { key:'bestellungen', icon:'📝', title:'Lagerbestellungen', desc:'Benötigtes Material erfassen & Bestellstatus abhaken' },
@@ -7721,7 +7721,7 @@ function showRoteHalleList(){
   currentBack = () => showCategoryList('lager');
   el('headerTitle').innerHTML = 'Rote Halle<span id="headerSubtitle">Völzke Heizung · Lüftung · Sanitär</span>';
   setChrome({ tabNav:false, bottomBar:false, prevNext:false, statusPill:false, back:true });
-  el('mainContent').innerHTML = `<p class="home-intro">Lagerkontrolle für die rote Halle.</p>`;
+  el('mainContent').innerHTML = `<p class="home-intro">Lagerkontrolle und Kommissionsregal für die rote Halle.</p>`;
   const wrap = document.createElement('div');
   wrap.className = 'card-grid';
   wrap.innerHTML = `
@@ -7734,8 +7734,14 @@ function showRoteHalleList(){
       <div class="cl-icon">📋</div>
       <h3>Protokoll ansehen</h3>
       <p>Bisherige Einträge der Lagerkontrolle</p>
+    </button>
+    <button class="cl-card" data-key="kommission">
+      <div class="cl-icon">🗄️</div>
+      <h3>Kommissionsregal</h3>
+      <p>Freies Notizfeld zum Kommissionsregal</p>
     </button>`;
   el('mainContent').appendChild(wrap);
+  wrap.querySelector('[data-key="kommission"]').addEventListener('click', openKommissionsregal);
   wrap.querySelector('[data-key="check"]').addEventListener('click', ()=>{
     currentBack = showRoteHalleList;
     setChrome({ tabNav:false, bottomBar:true, prevNext:false, statusPill:false, back:true });
@@ -7747,6 +7753,97 @@ function showRoteHalleList(){
     shellChecklistenApp.openLog('lager');
   });
 }
+
+/* ---- Rote Halle → Kommissionsregal: ein großes, freies Textfeld ----
+   Gespeichert wird im bestehenden Neubau-Sheet als eigene Zeile
+   (Spalte "fach" = "Kommissionsregal Rote Halle"). Das Neubau-Script legt
+   unbekannte Schlüssel per appendRow selbst an, die Neubau-Ansicht zeigt
+   nur die Stellplätze 1–50 und ignoriert diese Zeile. Zusätzlich lokale
+   Kopie im Gerät, damit beim Tippen ohne Netz nichts verloren geht. */
+const KOMMISSIONSREGAL_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbwQZV854OzW9j0QOkroxp_uJSxS6GTUDU4M7khQG_1MZiEZn1YO0PLob9GTTiBoHZLV/exec';
+const KOMMISSIONSREGAL_KEY = 'Kommissionsregal Rote Halle';
+const KOMMISSIONSREGAL_LOCAL = 'voelzke_kommissionsregal_rote_halle';
+let kommTimer = null;
+let kommDirty = false;
+
+function kommEscape(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function kommSetStatus(txt){
+  const s = el('kommStatus');
+  if(s) s.textContent = txt;
+}
+
+function kommSaveNow(){
+  if(kommTimer){ clearTimeout(kommTimer); kommTimer = null; }
+  const ta = el('kommText');
+  if(!ta || !kommDirty) return;
+  const text = ta.value;
+  try{ localStorage.setItem(KOMMISSIONSREGAL_LOCAL, text); } catch(e){}
+  kommSetStatus('Speichert …');
+  fetch(KOMMISSIONSREGAL_WEBHOOK_URL, {
+    method:'POST',
+    mode:'no-cors',
+    headers:{ 'Content-Type':'text/plain' },
+    body: JSON.stringify({ action:'update', fach: KOMMISSIONSREGAL_KEY, text, voll:'Nein' }),
+  }).then(()=>{
+    kommDirty = false;
+    kommSetStatus('Gespeichert ✓');
+  }).catch(()=>{
+    kommSetStatus('Nicht gespeichert – kein Internet? Text bleibt auf diesem Gerät.');
+  });
+}
+
+async function kommLoad(){
+  try{
+    const res = await fetch(KOMMISSIONSREGAL_WEBHOOK_URL);
+    const rows = await res.json();
+    if(!Array.isArray(rows)) return;
+    const row = rows.find(r => r.fach === KOMMISSIONSREGAL_KEY);
+    const ta = el('kommText');
+    if(!ta || kommDirty) return; // schon angefangen zu tippen → nicht überschreiben
+    const text = row ? (row.text || '') : '';
+    ta.value = text;
+    try{ localStorage.setItem(KOMMISSIONSREGAL_LOCAL, text); } catch(e){}
+    kommSetStatus('Aktueller Stand geladen');
+  } catch(err){
+    kommSetStatus('Offline – zeige Stand auf diesem Gerät');
+  }
+}
+
+function openKommissionsregal(){
+  currentBack = () => { kommSaveNow(); showRoteHalleList(); };
+  el('headerTitle').innerHTML = 'Kommissionsregal<span id="headerSubtitle">Rote Halle</span>';
+  setChrome({ tabNav:false, bottomBar:false, prevNext:false, statusPill:false, back:true });
+  let lokal = '';
+  try{ lokal = localStorage.getItem(KOMMISSIONSREGAL_LOCAL) || ''; } catch(e){}
+  kommDirty = false;
+  el('mainContent').innerHTML = `
+    <div class="section">
+      <div class="section-header"><h3>Kommissionsregal</h3></div>
+      <div class="section-body">
+        <div class="field">
+          <textarea id="kommText" placeholder="Was liegt im Kommissionsregal? (frei schreiben oder diktieren)" style="min-height:60vh;font-size:15px;line-height:1.45;">${kommEscape(lokal)}</textarea>
+        </div>
+        <p class="subtitle" id="kommStatus" style="margin:6px 0 0 2px;">Lädt …</p>
+      </div>
+    </div>`;
+  const ta = el('kommText');
+  ta.addEventListener('input', ()=>{
+    kommDirty = true;
+    kommSetStatus('Ungespeichert …');
+    if(kommTimer) clearTimeout(kommTimer);
+    kommTimer = setTimeout(kommSaveNow, 900);
+  });
+  ta.addEventListener('blur', kommSaveNow);
+  window.scrollTo(0,0);
+  kommLoad();
+}
+
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'hidden' && el('kommText')) kommSaveNow();
+});
 
 function openLagerHugo(){
   currentBack = () => showCategoryList('lager');
